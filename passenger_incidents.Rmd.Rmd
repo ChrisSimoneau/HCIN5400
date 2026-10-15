@@ -1,0 +1,793 @@
+---
+title: "Commercial Passenger Flight Incidents (2002–2024)"
+author: "Dongqi Mo"
+date: "2026-10-06"
+output: html_document
+---
+
+```{r}
+accidents <- read.csv(file.choose(), check.names = FALSE)
+
+nrow(accidents)
+```
+
+```{r}
+library(dplyr)
+
+review_new <- accidents %>%
+  mutate(Year = as.integer(sub(".* ", "", Date))) %>%
+  filter(Year >= 2002, Year <= 2024) %>%
+  mutate(ID = row_number())
+
+nrow(review_new)
+```
+
+```{r}
+review_new <- review_new %>%
+  mutate(
+    Category = "Unclassified",
+    Reason = ""
+  )
+
+View(review_new %>%
+  select(ID, Date, Operator, Route, Summary, Category, Reason))
+```
+
+```{r}
+military_check <- review_new %>%
+  filter(
+    grepl(
+      "military|air force|army|navy|armed forces",
+      Operator,
+      ignore.case = TRUE
+    )
+  ) %>%
+  select(ID, Date, Operator, Route, Summary)
+
+nrow(military_check)
+View(military_check)
+```
+
+```{r}
+View(military_operators)
+```
+
+```{r}
+military_ids <- military_check$ID
+
+review_new <- review_new %>%
+  mutate(
+    Category = if_else(ID %in% military_ids, "Military", Category),
+    Reason = if_else(
+      ID %in% military_ids,
+      "Military operator; mixed operators included by user decision",
+      Reason
+    )
+  )
+
+candidates <- review_new %>%
+  filter(Category != "Military")
+
+nrow(candidates)
+```
+
+```{r}
+private_check <- candidates %>%
+  filter(grepl("private", Operator, ignore.case = TRUE)) %>%
+  select(ID, Date, Operator, Route, Summary)
+
+nrow(private_check)
+View(private_check)
+```
+
+```{r}
+View(candidates %>%
+  select(ID, Date, Operator, Route, Aboard, Summary))
+```
+
+```{r}
+View(review_new %>%
+  filter(ID %in% private_check$ID) %>%
+  select(ID, Date, Operator, Route, Aboard, Summary, Category))
+```
+
+```{r}
+review_new <- review_new %>%
+  mutate(
+    Category = case_when(
+      ID %in% c(19, 154) ~ "Private",
+      ID == 153 ~ "Medical",
+      ID %in% c(67, 465, 551) ~ "Special mission",
+      ID == 633 ~ "Cargo",
+      TRUE ~ Category
+    ),
+    Reason = case_when(
+      ID %in% c(19, 154) ~ "Private or corporate operator",
+      ID == 67 ~ "Skydiving flight",
+      ID == 153 ~ "Air ambulance",
+      ID == 465 ~ "Air race",
+      ID == 551 ~ "Filming mission",
+      ID == 633 ~ "Summary identifies cargo plane",
+      TRUE ~ Reason
+    )
+  )
+
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+nrow(candidates)
+```
+
+```{r}
+cargo_operator_check <- candidates %>%
+  filter(
+    grepl("cargo|freight", Operator, ignore.case = TRUE)
+  ) %>%
+  select(ID, Date, Operator, Route, Aboard, Summary)
+
+nrow(cargo_operator_check)
+View(cargo_operator_check)
+```
+
+```{r}
+cargo_ids <- c(
+  102, 130, 136, 248, 286, 314, 318,
+  406, 417, 431, 444, 506, 508,
+  544, 590, 594, 601
+)
+
+review_new <- review_new %>%
+  mutate(
+    Category = if_else(
+      ID %in% cargo_ids, "Cargo", Category
+    ),
+    Reason = if_else(
+      ID %in% cargo_ids,
+      "Summary identifies cargo flight",
+      Reason
+    )
+  )
+
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+nrow(candidates)
+```
+
+```{r}
+cargo_summary_check <- candidates %>%
+  filter(
+    grepl("cargo|freight", Summary, ignore.case = TRUE)
+  ) %>%
+  select(ID, Date, Operator, Route, Aboard, Summary)
+
+nrow(cargo_summary_check)
+View(cargo_summary_check)
+```
+
+```{r}
+crew_only_ids <- cargo_summary_check %>%
+  filter(
+    grepl(
+      "passengers\\s*:\\s*0\\s+crew",
+      Aboard,
+      ignore.case = TRUE
+    )
+  ) %>%
+  pull(ID)
+
+review_new <- review_new %>%
+  mutate(
+    Category = if_else(
+      ID %in% crew_only_ids, "Crew only", Category
+    ),
+    Reason = if_else(
+      ID %in% crew_only_ids,
+      "Cargo review: zero passengers reported",
+      Reason
+    )
+  )
+
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+cargo_summary_remaining <- cargo_summary_check %>%
+  filter(!ID %in% crew_only_ids)
+
+length(crew_only_ids)
+nrow(cargo_summary_remaining)
+nrow(candidates)
+
+View(cargo_summary_remaining)
+```
+
+```{r}
+confirmed_cargo_ids <- c(
+  10, 13, 26, 61, 93, 219, 226, 244,
+  256, 261, 272, 280, 281, 284, 289,
+  362, 386, 458, 475, 525, 543, 564,
+  624, 634, 643
+)
+
+review_new <- review_new %>%
+  mutate(
+    Category = if_else(
+      ID %in% confirmed_cargo_ids, "Cargo", Category
+    ),
+    Reason = if_else(
+      ID %in% confirmed_cargo_ids,
+      "Summary identifies cargo or postal flight",
+      Reason
+    )
+  )
+
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+nrow(candidates)
+```
+
+```{r}
+six_check <- candidates %>%
+  filter(ID %in% c(29, 117, 127, 214, 512, 563)) %>%
+  select(ID, Operator, Aboard, Summary)
+
+for (i in seq_len(nrow(six_check))) {
+  cat(
+    "\nID:", six_check$ID[i],
+    "\nOperator:", six_check$Operator[i],
+    "\nAboard:", six_check$Aboard[i],
+    "\nSummary:", six_check$Summary[i],
+    "\n\n"
+  )
+}
+```
+
+```{r}
+review_new <- review_new %>%
+  mutate(
+    Category = case_when(
+      ID == 127 ~ "Humanitarian mission",
+      ID == 214 ~ "Test flight",
+      TRUE ~ Category
+    ),
+    Reason = case_when(
+      ID == 127 ~ "Mission delivering humanitarian aid",
+      ID == 214 ~ "Summary explicitly identifies test flight",
+      TRUE ~ Reason
+    )
+  )
+
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+nrow(candidates)
+```
+
+```{r}
+library(dplyr)
+
+medical_check <- candidates %>%
+  filter(
+    grepl(
+      "ambulance|medevac|medical|medflight|air evac",
+      paste(Operator, Summary),
+      ignore.case = TRUE
+    )
+  ) %>%
+  select(ID, Date, Operator, Route, Aboard, Summary)
+
+nrow(medical_check)
+View(medical_check)
+```
+
+```{r}
+library(dplyr)
+
+medical_ids <- c(
+  82, 124, 176, 246, 309, 315,
+  331, 341, 374, 389, 396, 501,
+  509, 524, 526, 529, 546, 558,
+  597, 600, 640, 653, 663
+)
+
+review_new <- review_new %>%
+  mutate(
+    Category = if_else(
+      ID %in% medical_ids, "Medical", Category
+    ),
+    Reason = if_else(
+      ID %in% medical_ids,
+      "Medical transport or associated repositioning flight",
+      Reason
+    )
+  )
+
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+nrow(candidates)
+```
+
+```{r}
+library(dplyr)
+
+training_check <- candidates %>%
+  filter(
+    grepl(
+      "training",
+      paste(Route, Summary),
+      ignore.case = TRUE
+    )
+  ) %>%
+  select(ID, Date, Operator, Route, Aboard, Summary)
+
+nrow(training_check)
+View(training_check)
+```
+
+```{r}
+training_ids <- c(35, 221, 222, 336, 349)
+
+review_new <- review_new %>%
+  mutate(
+    Category = if_else(
+      ID %in% training_ids, "Training", Category
+    ),
+    Reason = if_else(
+      ID %in% training_ids,
+      "Route or summary explicitly identifies training flight",
+      Reason
+    )
+  )
+
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+training_remaining <- training_check %>%
+  filter(!ID %in% training_ids)
+
+nrow(candidates)
+nrow(training_remaining)
+View(training_remaining)
+```
+
+```{r}
+for (i in seq_len(nrow(training_remaining))) {
+  cat(
+    "\nID:", training_remaining$ID[i],
+    "\nOperator:", training_remaining$Operator[i],
+    "\nRoute:", training_remaining$Route[i],
+    "\nAboard:", training_remaining$Aboard[i],
+    "\nSummary:", training_remaining$Summary[i],
+    "\n\n"
+  )
+}
+```
+
+```{r}
+review_new <- review_new %>%
+  mutate(
+    Category = if_else(
+      ID == 149, "Repositioning", Category
+    ),
+    Reason = if_else(
+      ID == 149,
+      "Summary explicitly identifies repositioning flight",
+      Reason
+    )
+  )
+
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+nrow(candidates)
+```
+
+```{r}
+test_check <- candidates %>%
+  filter(
+    grepl(
+      "test[ -]?flight",
+      paste(Route, Summary),
+      ignore.case = TRUE
+    )
+  ) %>%
+  select(ID, Date, Operator, Route, Aboard, Summary)
+
+nrow(test_check)
+View(test_check)
+```
+
+```{r}
+review_new <- review_new %>%
+  mutate(
+    Category = if_else(ID == 618, "Test flight", Category),
+    Reason = if_else(
+      ID == 618,
+      "Route explicitly identifies test flight",
+      Reason
+    )
+  )
+
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+nrow(candidates)
+```
+
+```{r}
+positioning_check <- candidates %>%
+  filter(
+    grepl(
+      "positioning|repositioning|ferry",
+      paste(Route, Summary),
+      ignore.case = TRUE
+    )
+  ) %>%
+  select(ID, Date, Operator, Route, Aboard, Summary)
+
+nrow(positioning_check)
+View(positioning_check)
+```
+
+```{r}
+positioning_ids <- c(47, 59, 91, 106, 326, 388)
+
+review_new <- review_new %>%
+  mutate(
+    Category = if_else(
+      ID %in% positioning_ids, "Repositioning", Category
+    ),
+    Reason = if_else(
+      ID %in% positioning_ids,
+      "Summary explicitly identifies positioning flight",
+      Reason
+    )
+  )
+
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+nrow(candidates)
+```
+
+```{r}
+positioning_remaining <- positioning_check %>%
+  filter(!ID %in% positioning_ids)
+
+for (i in seq_len(nrow(positioning_remaining))) {
+  cat(
+    "\nID:", positioning_remaining$ID[i],
+    "\nOperator:", positioning_remaining$Operator[i],
+    "\nRoute:", positioning_remaining$Route[i],
+    "\nAboard:", positioning_remaining$Aboard[i],
+    "\nSummary:", positioning_remaining$Summary[i],
+    "\n\n"
+  )
+}
+```
+
+```{r}
+review_new <- review_new %>%
+  mutate(
+    Category = case_when(
+      ID == 321 ~ "Special mission",
+      ID == 369 ~ "Repositioning",
+      TRUE ~ Category
+    ),
+    Reason = case_when(
+      ID == 321 ~ "Firefighter transport for firefighting operations",
+      ID == 369 ~ "Summary explicitly identifies ferrying flight",
+      TRUE ~ Reason
+    )
+  )
+
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+nrow(candidates)
+```
+
+```{r}
+special_check <- candidates %>%
+  filter(
+    grepl(
+      "firefight|fire fight|fire department|water bombing|search and rescue|patrol|survey|crop dust|crop spray|agricultural|skydiv|parachut",
+      paste(Operator, Route, Summary),
+      ignore.case = TRUE
+    )
+  ) %>%
+  select(ID, Date, Operator, Route, Aboard, Summary)
+
+nrow(special_check)
+View(special_check)
+```
+
+```{r}
+review_new <- review_new %>%
+  mutate(
+    Category = if_else(ID == 533, "Special mission", Category),
+    Reason = if_else(
+      ID == 533,
+      "Route and summary explicitly identify skydiving operation",
+      Reason
+    )
+  )
+
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+nrow(candidates)
+```
+
+```{r}
+special_remaining <- special_check %>%
+  filter(ID != 533)
+
+for (i in seq_len(nrow(special_remaining))) {
+  cat(
+    "\nID:", special_remaining$ID[i],
+    "\nOperator:", special_remaining$Operator[i],
+    "\nRoute:", special_remaining$Route[i],
+    "\nSummary:", special_remaining$Summary[i],
+    "\n\n"
+  )
+}
+```
+
+```{r}
+government_check <- candidates %>%
+  filter(
+    grepl(
+      "government|police| ministry|minister|presiden|coast guard|border guard|fuerza a[eé]rea|for[cç]a a[eé]rea|ISAF",
+      paste(Operator, Route, Summary),
+      ignore.case = TRUE
+    )
+  ) %>%
+  select(ID, Date, Operator, Route, Aboard, Summary)
+
+nrow(government_check)
+View(government_check)
+```
+
+```{r}
+government_ids <- c(174, 265, 344, 394, 472, 522, 585)
+
+review_new <- review_new %>%
+  mutate(
+    Category = case_when(
+      ID %in% c(265, 472) ~ "Military",
+      ID %in% c(174, 522, 585) ~ "Police",
+      ID %in% c(344, 394) ~ "Government",
+      TRUE ~ Category
+    ),
+    Reason = if_else(
+      ID %in% government_ids,
+      "Explicit government, military or police operation in dataset",
+      Reason
+    )
+  )
+
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+nrow(candidates)
+```
+
+```{r}
+government_remaining <- government_check %>%
+  filter(!ID %in% government_ids)
+
+for (i in seq_len(nrow(government_remaining))) {
+  cat(
+    "\nID:", government_remaining$ID[i],
+    "\nOperator:", government_remaining$Operator[i],
+    "\nRoute:", government_remaining$Route[i],
+    "\nAboard:", government_remaining$Aboard[i],
+    "\nSummary:", government_remaining$Summary[i],
+    "\n\n"
+  )
+}
+```
+
+```{r}
+review_new <- review_new %>%
+  mutate(
+    Category = case_when(
+      ID == 4 ~ "Government",
+      ID == 486 ~ "Non-commercial",
+      ID == 583 ~ "Special mission",
+      TRUE ~ Category
+    ),
+    Reason = case_when(
+      ID == 4 ~ "Summary explicitly identifies government aircraft",
+      ID == 486 ~ "Unauthorized personal flight in a stolen aircraft",
+      ID == 583 ~ "Surveillance mission tracing illicit trafficking routes",
+      TRUE ~ Reason
+    )
+  )
+
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+nrow(candidates)
+```
+
+```{r}
+private_business_check <- candidates %>%
+  filter(
+    grepl(
+      "private|corporate|executive|personal flight|company flight|business flight",
+      paste(Operator, Route, Summary),
+      ignore.case = TRUE
+    )
+  ) %>%
+  select(ID, Date, Operator, Route, Aboard, Summary)
+
+nrow(private_business_check)
+View(private_business_check)
+```
+
+```{r}
+for (i in seq_len(nrow(private_business_check))) {
+  cat(
+    "\nID:", private_business_check$ID[i],
+    "\nOperator:", private_business_check$Operator[i],
+    "\nRoute:", private_business_check$Route[i],
+    "\nAboard:", private_business_check$Aboard[i],
+    "\nSummary:", private_business_check$Summary[i],
+    "\n\n"
+  )
+}
+```
+
+```{r}
+review_new <- review_new %>%
+  mutate(
+    Category = if_else(ID == 23, "Crew only", Category),
+    Reason = if_else(
+      ID == 23,
+      "Summary confirms all passengers had disembarked; only crew aboard",
+      Reason
+    )
+  )
+
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+nrow(candidates)
+```
+
+```{r}
+zero_passenger_check <- candidates %>%
+  filter(
+    grepl(
+      "passengers\\s*:\\s*0\\s+crew",
+      Aboard,
+      ignore.case = TRUE
+    )
+  ) %>%
+  select(ID, Date, Operator, Route, Aboard, Summary)
+
+nrow(zero_passenger_check)
+View(zero_passenger_check)
+```
+
+```{r}
+zero_passenger_ids <- zero_passenger_check$ID
+
+review_new <- review_new %>%
+  mutate(
+    Category = if_else(
+      ID %in% zero_passenger_ids,
+      "Crew only",
+      Category
+    ),
+    Reason = if_else(
+      ID %in% zero_passenger_ids,
+      "Aboard records zero passengers; only crew aboard",
+      Reason
+    )
+  )
+
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+nrow(candidates)
+```
+
+```{r}
+unknown_passenger_check <- candidates %>%
+  filter(
+    is.na(Aboard) |
+      !grepl(
+        "passengers\\s*:\\s*[0-9]+",
+        Aboard,
+        ignore.case = TRUE
+      )
+  ) %>%
+  select(ID, Date, Operator, Route, Aboard, Summary)
+
+nrow(unknown_passenger_check)
+View(unknown_passenger_check)
+```
+
+```{r}
+review_new <- review_new %>%
+  mutate(
+    Category = if_else(ID == 429, "Military", Category),
+    Reason = if_else(
+      ID == 429,
+      "Summary explicitly identifies military helicopter",
+      Reason
+    )
+  )
+
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+nrow(candidates)
+```
+
+```{r}
+unknown_passenger_remaining <- unknown_passenger_check %>%
+  filter(ID != 429)
+
+for (i in seq_len(nrow(unknown_passenger_remaining))) {
+  cat(
+    "\nID:", unknown_passenger_remaining$ID[i],
+    "\nOperator:", unknown_passenger_remaining$Operator[i],
+    "\nAboard:", unknown_passenger_remaining$Aboard[i],
+    "\nSummary:", unknown_passenger_remaining$Summary[i],
+    "\n\n"
+  )
+}
+```
+
+```{r}
+# Select records that have not yet been classified
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+# Display the number of remaining cases
+nrow(candidates)
+
+# Open the remaining cases in the data viewer
+View(candidates)
+```
+```{r}
+library(dplyr)
+
+# Select records that have not yet been classified
+candidates <- review_new %>%
+  filter(Category == "Unclassified")
+
+# Display the number of remaining cases
+nrow(candidates)
+
+# Open the remaining cases in the data viewer
+View(candidates)
+```
+
+```{r}
+library(dplyr)
+
+# Parse dates written with English month names
+remaining_period <- candidates %>%
+  mutate(
+    Parsed_Date = as.Date(Date, format = "%B %d, %Y")
+  ) %>%
+  filter(
+    Parsed_Date >= as.Date("2002-09-01"),
+    Parsed_Date <= as.Date("2024-12-31")
+  )
+
+# Display the number of remaining cases
+nrow(remaining_period)
+
+# View the selected records
+View(remaining_period)
+```
+
+

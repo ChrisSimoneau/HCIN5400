@@ -1,0 +1,111 @@
+---
+title: "HCIN5400 project"
+author: "Christian Simoneau"
+date: "2026-10-18"
+output: html_document
+---
+
+```{r}
+
+library(tidyverse)
+library(lubridate)
+
+# Load Dataset
+input_file <- "C:/Users/cpeng/Downloads/archive/accident_details_compiled.csv"
+raw_data <- read_csv(input_file, show_col_types = FALSE)
+
+# Automatically normalize column names (lowercase, replace special chars with underscores)
+names(raw_data) <- tolower(gsub("[^[:alnum:]]+", "_", names(raw_data)))
+
+# Initialize attrition tracking log
+attrition_log <- tibble(
+  Step = "0. Raw Dataset",
+  Records = nrow(raw_data)
+)
+
+log_attrition <- function(step_name, data) {
+  attrition_log <<- bind_rows(attrition_log, tibble(Step = step_name, Records = nrow(data)))
+}
+
+
+# 2. Date Parsing & Filtering (Sep 2002 - Dec 2024)
+curated_data <- raw_data %>%
+  mutate(
+    parsed_date = parse_date_time(.data[["date"]], orders = c("ymd", "mdy", "dmy", "Ymd", "m/d/Y")),
+    year = year(parsed_date),
+    month = month(parsed_date)
+  ) %>%
+  filter(
+    !is.na(parsed_date),
+    parsed_date >= ymd("2002-09-01") & parsed_date <= ymd("2024-12-31")
+  )
+
+log_attrition("1. Date Filter (Sep 2002 - Dec 2024)", curated_data)
+
+
+# 3. Aircraft Type Restriction: Fixed-Wing Only
+non_fixed_wing_regex <- "helicopter|rotorcraft|balloon|airship|glider|paramotor|ultralight|dirigible|autogyro|gyroplane"
+
+curated_data <- curated_data %>%
+  filter(
+    !str_detect(coalesce(.data[["ac_type"]], ""), regex(non_fixed_wing_regex, ignore_case = TRUE))
+  )
+
+log_attrition("2. Fixed-Wing Aircraft Isolation", curated_data)
+
+
+# 4. Exclusion Criteria: anything non commercial
+excluded_keywords_regex <- paste(
+  c(
+    "military", "air force", "army", "navy", "marines", "government", "state", "police",
+    "cargo", "freight", "postal", "mail", "dhl", "fedex", "ups","USMC",
+    "ambulance", "medevac", "medical",
+    "training", "instruction", "test flight", "ferry", "positioning", "delivery",
+    "firefighting", "survey", "mapping", "skydiving", "parachute", "crop dust", "agricultural",
+    "private", "corporate", "recreational", "personal", "pleasure", "unauthorized"
+  ),
+  collapse = "|"
+)
+
+curated_data <- curated_data %>%
+  filter(
+    !str_detect(coalesce(.data[["operator"]], ""), regex(excluded_keywords_regex, ignore_case = TRUE)),
+    !str_detect(coalesce(.data[["summary"]], ""), regex(excluded_keywords_regex, ignore_case = TRUE))
+  )
+
+log_attrition("3. Mission & Operation Exclusions (Cargo, Military, Medevac, Private, etc.)", curated_data)
+
+
+# 5. Passenger Manifest Filter: Exclude Zero-Passenger / Crew-Only Manifests
+curated_data <- curated_data %>%
+  mutate(
+    total_aboard = parse_number(.data[["aboard"]]),
+    is_crew_only = str_detect(.data[["aboard"]], "passengers:\\s*0")
+  ) %>%
+  filter(
+    !is.na(total_aboard),
+    total_aboard > 0,
+    is_crew_only == FALSE
+  ) %>%
+  select(-total_aboard, -is_crew_only) # Clean up temporary helper columns
+
+log_attrition("4. Passenger Manifest Filter (Aboard > 0 & Non-Crew-Only)", curated_data)
+
+
+# 6. Deduplication...if this is a word?
+curated_data <- curated_data %>% distinct()
+log_attrition("5. Deduplication & Final Polish", curated_data)
+
+# Print Summary Table
+cat("\n--- DATA CURATION ATTRITION SUMMARY ---\n")
+print(attrition_log)
+
+# Export Result
+output_file <- "C:/Users/cpeng/Downloads/archive/commercial_passenger_fixedwing_accidents_2002_2024.csv"
+write_csv(curated_data, output_file)
+
+cat("\nSuccess! Saved curated dataset to:\n", output_file, "\n")
+```
+
+
+

@@ -109,3 +109,93 @@ cat("\nSuccess! Saved curated dataset to:\n", output_file, "\n")
 
 
 
+```{r}
+library(ggplot2)
+library(dplyr)
+library(readr)
+
+# 1. Histogram: Accidents by Year
+ggplot(curated_data, aes(x = year)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "white") +
+  labs(
+    title = "Distribution of Commercial Fixed-Wing Accidents by Year",
+    subtitle = "September 2002 – December 2024",
+    x = "Year",
+    y = "Number of Accidents"
+  ) +
+  theme_minimal()
+
+# 2. Histogram: Fatalities per Accident
+curated_data %>%
+  mutate(fatalities_num = parse_number(as.character(fatalities))) %>%
+  ggplot(aes(x = fatalities_num)) +
+  geom_histogram(bins = 30, fill = "coral", color = "white") +
+  labs(
+    title = "Distribution of Fatalities per Accident",
+    subtitle = "Commercial Passenger Fixed-Wing Aircraft (2002–2024)",
+    x = "Number of Fatalities",
+    y = "Frequency (Number of Accidents)"
+  ) +
+  theme_minimal()
+
+# 3. Histogram: Total Persons Aboard per Accident
+curated_data %>%
+  mutate(aboard_num = parse_number(as.character(aboard))) %>%
+  ggplot(aes(x = aboard_num)) +
+  geom_histogram(bins = 30, fill = "forestgreen", color = "white") +
+  labs(
+    title = "Distribution of Total Persons Aboard per Accident",
+    subtitle = "Commercial Passenger Fixed-Wing Aircraft (2002–2024)",
+    x = "Persons Aboard",
+    y = "Frequency (Number of Accidents)"
+  ) +
+  theme_minimal()
+```
+
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(stringr)
+
+# Tally top 15 airlines/carriers and visualize
+curated_data %>%
+  filter(!is.na(operator), operator != "") %>%
+  mutate(operator = str_to_title(trimws(operator))) %>%
+  count(operator, sort = TRUE) %>%
+  slice_max(n, n = 15, with_ties = FALSE) %>%
+  ggplot(aes(x = reorder(operator, n), y = n)) +
+  geom_col(fill = "darkslateblue") +
+  coord_flip() +
+  labs(
+    title = "Top 15 Airlines/Carriers by Accident Count",
+    subtitle = "Commercial Passenger Fixed-Wing Aircraft (2002–2024)",
+    x = "Airline / Carrier",
+    y = "Number of Accidents"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(stringr)
+
+# Tally top 15 aircraft types and visualize
+curated_data %>%
+  filter(!is.na(ac_type), ac_type != "") %>%
+  mutate(ac_type = str_to_title(trimws(ac_type))) %>%
+  count(ac_type, sort = TRUE) %>%
+  slice_max(n, n = 20, with_ties = FALSE) %>%
+  ggplot(aes(x = reorder(ac_type, n), y = n)) +
+  geom_col(fill = "darkcyan") +
+  coord_flip() +
+  labs(
+    title = "Top 20Aircraft Types by Accident Count",
+    subtitle = "Commercial Passenger Fixed-Wing Aircraft (2002–2024)",
+    x = "Aircraft Type / Model",
+    y = "Number of Accidents"
+  ) +
+  theme_minimal()
+```
+

@@ -1,0 +1,178 @@
+---
+title: "GDP Data Cleaning and Descriptive Statistics by Country"
+subtitle: "2002–2023 | World Bank GDP (current US$)"
+output:
+  html_document:
+    toc: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, fig.width=9, fig.height=5)
+```
+
+## Data and Scope
+
+Source: [World Bank GDP](https://data.worldbank.org/indicator/NY.GDP.MKTP.CD), indicator `NY.GDP.MKTP.CD`, measured in current US dollars.
+
+Each country or economy is analyzed separately. Statistics are not pooled across countries. The requested period is September 2002 through December 2023; however, this source provides annual data only. This report therefore covers 2002–2023, including the entire year of 2002.
+
+## Data Download and Cleaning
+
+World, regional, and income-group aggregates are excluded. Individual countries, economies, and territories are retained. Missing values remain NA and are not replaced with zeros or interpolated. Duplicate country-year records trigger an error. Nonpositive GDP observations are retained and flagged for review. The first run requires an internet connection; subsequent runs reuse the original data in the raw folder.
+
+```{r cleaning}
+start_year <- 2002L
+end_year <- 2023L
+
+# Save outputs beside this script when run with Rscript or RStudio Source.
+script_arg <- character(0)
+source_file <- tryCatch(sys.frame(1)$ofile, error = function(e) NULL)
+if (length(script_arg)) {
+  base_dir <- dirname(normalizePath(sub("^--file=", "", script_arg[1])))
+} else if (!is.null(source_file)) {
+  base_dir <- dirname(normalizePath(source_file))
+} else {
+  base_dir <- getwd()
+}
+raw_dir <- file.path(base_dir, "raw")
+output_dir <- file.path(base_dir, "output")
+dir.create(raw_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+url <- "https://api.worldbank.org/v2/en/indicator/NY.GDP.MKTP.CD?downloadformat=csv"
+zip_path <- file.path(raw_dir, "worldbank_gdp.zip")
+if (!file.exists(zip_path)) {
+  download.file(url, zip_path, mode = "wb", method = "libcurl")
+}
+members <- unzip(zip_path, list = TRUE)$Name
+data_member <- grep("^API_.*[.]csv$", members, value = TRUE)
+country_member <- grep("^Metadata_Country_.*[.]csv$", members, value = TRUE)
+stopifnot(length(data_member) == 1L, length(country_member) == 1L)
+unzip(zip_path, files = c(data_member, country_member), exdir = raw_dir)
+
+# World Bank data CSV contains four introductory lines before its header.
+raw <- read.csv(file.path(raw_dir, data_member), skip = 4,
+                check.names = FALSE, na.strings = c("", "NA", ".."),
+                stringsAsFactors = FALSE, fileEncoding = "UTF-8-BOM")
+metadata <- read.csv(file.path(raw_dir, country_member),
+                     check.names = FALSE, na.strings = c("", "NA"),
+                     stringsAsFactors = FALSE, fileEncoding = "UTF-8-BOM")
+stopifnot(all(c("Country Name", "Country Code") %in% names(raw)),
+          all(c("Country Code", "Region") %in% names(metadata)))
+
+# Metadata Region is populated for individual countries/economies, and blank
+# for aggregates such as World, regions and income groups. Territories remain.
+is_economy <- !is.na(metadata$Region) & nzchar(trimws(metadata$Region))
+country_codes <- metadata$`Country Code`[is_economy]
+excluded <- raw[!raw$`Country Code` %in% country_codes,
+                c("Country Name", "Country Code"), drop = FALSE]
+countries <- raw[raw$`Country Code` %in% country_codes, , drop = FALSE]
+years <- as.character(seq.int(start_year, end_year))
+stopifnot(all(years %in% names(countries)))
+
+clean <- do.call(rbind, lapply(years, function(y) {
+  data.frame(country = countries$`Country Name`,
+             country_code = countries$`Country Code`,
+             year = as.integer(y),
+             gdp_current_usd = suppressWarnings(as.numeric(countries[[y]])),
+             stringsAsFactors = FALSE)
+}))
+clean <- clean[order(clean$country, clean$year), ]
+rownames(clean) <- NULL
+duplicate_count <- sum(duplicated(clean[c("country_code", "year")]))
+# Do not silently drop conflicting duplicate records.
+if (duplicate_count > 0L) stop("Duplicate country-year records found; inspect source.")
+if (any(!is.finite(clean$gdp_current_usd) & !is.na(clean$gdp_current_usd))) {
+  stop("Non-finite GDP values found; inspect source.")
+}
+# Keep missing values as NA; do not replace them with zero or interpolate.
+# Retain unusual observations and flag them for review, rather than deleting.
+clean$missing_gdp <- is.na(clean$gdp_current_usd)
+clean$nonpositive_gdp <- !clean$missing_gdp & clean$gdp_current_usd <= 0
+
+describe_country <- function(d) {
+  x <- d$gdp_current_usd[!is.na(d$gdp_current_usd)]
+  n <- length(x)
+  data.frame(
+    country = d$country[1], country_code = d$country_code[1],
+    start_year = start_year, end_year = end_year,
+    valid_years = n, missing_years = nrow(d) - n,
+    missing_percent = 100 * (nrow(d) - n) / nrow(d),
+    mean_usd = if (n) mean(x) else NA_real_,
+    median_usd = if (n) median(x) else NA_real_,
+    sd_usd = if (n > 1) sd(x) else NA_real_,
+    min_usd = if (n) min(x) else NA_real_,
+    q1_usd = if (n) unname(quantile(x, 0.25, type = 7)) else NA_real_,
+    q3_usd = if (n) unname(quantile(x, 0.75, type = 7)) else NA_real_,
+    max_usd = if (n) max(x) else NA_real_,
+    stringsAsFactors = FALSE
+  )
+}
+stats <- do.call(rbind, lapply(split(clean, clean$country_code), describe_country))
+stats <- stats[order(stats$country), ]
+rownames(stats) <- NULL
+stopifnot(nrow(clean) == nrow(stats) * length(years),
+          all(stats$valid_years + stats$missing_years == length(years)))
+
+write.csv(clean, file.path(output_dir, "gdp_clean_2002_2023.csv"),
+          row.names = FALSE, na = "", fileEncoding = "UTF-8")
+write.csv(stats, file.path(output_dir, "gdp_statistics_by_country.csv"),
+          row.names = FALSE, na = "", fileEncoding = "UTF-8")
+write.csv(excluded, file.path(output_dir, "excluded_aggregates.csv"),
+          row.names = FALSE, fileEncoding = "UTF-8")
+write.csv(clean[clean$missing_gdp | clean$nonpositive_gdp, ],
+          file.path(output_dir, "data_quality_review.csv"),
+          row.names = FALSE, na = "", fileEncoding = "UTF-8")
+
+```
+
+The analysis includes **`r nrow(stats)`** countries or economies and **`r nrow(clean)`** country-year records, including **`r sum(clean$missing_gdp)`** missing GDP observations.
+
+## Cleaned Data Preview
+
+```{r preview}
+head(clean, 12)
+```
+
+## Descriptive Statistics by Country
+
+For each country, the report calculates the number of valid years, missing years, percentage of missing years, mean, median, sample standard deviation, minimum, maximum, and quartiles. Monetary statistics are in current US dollars. Quartiles use the default R type 7 method. Missing observations are excluded from monetary calculations.
+
+```{r statistics}
+stats
+```
+
+## GDP Trends by Country
+
+Each chart represents one country or economy. GDP is shown in billions of current US dollars. Missing years appear as gaps in the series.
+
+```{r trends, echo=FALSE}
+for (code in stats$country_code) {
+  d <- clean[clean$country_code == code, ]
+  if (any(!d$missing_gdp)) {
+    plot(d$year, d$gdp_current_usd / 1e9, type="o", pch=16,
+         col="#2463A6", xlab="Year", ylab="GDP (billion current US$)",
+         main=paste(d$country[1], "GDP, 2002-2023"))
+    grid()
+  } else {
+    plot.new()
+    title(main=d$country[1], sub="No observations available")
+  }
+}
+```
+
+## Interpretation and Limitations
+
+These statistics describe the distribution of annual nominal GDP within each country over the study period. Check the number of valid years when comparing countries, because different patterns of missing data affect comparability. GDP in current US dollars is affected by inflation and exchange rates; changes cannot be interpreted directly as real economic growth. Total GDP does not directly measure living standards.
+
+## Exported Results
+
+The output folder contains CSV files with cleaned data, descriptive statistics by country, excluded aggregates, and data quality review records. The raw folder preserves the original downloaded files for reproducibility.
+
+## Session Information
+
+```{r session}
+Sys.Date()
+sessionInfo()
+```

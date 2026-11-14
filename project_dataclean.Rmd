@@ -100,11 +100,7 @@ log_attrition("5. Deduplication & Final Polish", curated_data)
 cat("\n--- DATA CURATION ATTRITION SUMMARY ---\n")
 print(attrition_log)
 
-# Export Result
-output_file <- "C:/Users/cpeng/Downloads/archive/commercial_passenger_fixedwing_accidents_2002_2024.csv"
-write_csv(curated_data, output_file)
 
-cat("\nSuccess! Saved curated dataset to:\n", output_file, "\n")
 ```
 
 
@@ -146,7 +142,7 @@ curated_data <- raw_data %>%
 log_attrition("1. Date Filter (Sep 2002 - Dec 2024)", curated_data)
 
 
-# 3. Aircraft Type Restriction: Fixed-Wing Only (Excludes Helicopters & Rotorcraft Manufacturers)
+# 3. Aircraft Type Restriction: Fixed-Wing Only 
 non_fixed_wing_regex <- paste(
   c(
     "helicopter", "helicóptero", "rotorcraft", "balloon", "airship", "glider", 
@@ -241,6 +237,62 @@ curated_data %>%
   ) +
   theme_minimal()
 ```
+```{r}
+library(tidyverse)
+library(jsonlite)
+
+# ---- 1. Load & clean the airline -> country lookup ----
+norm_name <- function(x) {
+  x %>%
+    str_to_lower() %>%
+    str_replace_all("&", " and ") %>%
+    str_replace_all("[^[:alnum:] ]", " ") %>%
+    str_squish()
+}
+
+airline_lookup <- fromJSON("C:/Users/cpeng/Desktop/airlines_by_country.json") %>% ## copy path did not work apparently slashes were backwards?
+  as_tibble() %>%
+  # drop the ints
+  filter(!str_detect(Airline_URL, "/photos/"),
+         !str_detect(Airline, "^[0-9,]+$")) %>%
+  mutate(key = norm_name(Airline)) %>%
+  # edge case testing
+  group_by(key) %>%
+  summarise(Country = first(Country),
+            ambiguous = n_distinct(Country) > 1,
+            .groups = "drop")
+
+# ---- 2. Join crashes to country ----
+crashes_country <- curated_data %>%
+  filter(!is.na(operator), operator != "") %>%
+  mutate(key = norm_name(operator)) %>%
+  left_join(airline_lookup, by = "key")
+
+# ---- 3. Peekaboo at crash matching ----
+cat("Matched:", sum(!is.na(crashes_country$Country)), "of", nrow(crashes_country), "\n")
+
+crashes_country %>%
+  filter(is.na(Country)) %>%
+  count(operator, sort = TRUE) %>%
+  head(30)          
+
+# ---- 4. Crashes by country ----
+country_counts <- crashes_country %>%
+  filter(!is.na(Country)) %>%
+  count(Country, sort = TRUE)
+
+country_counts
+
+country_counts %>%
+  slice_max(n, n = 15, with_ties = FALSE) %>%
+  ggplot(aes(x = reorder(Country, n), y = n)) +
+  geom_col(fill = "darkslateblue") +
+  coord_flip() +
+  labs(title = "Top 15 Countries by Accident Count",
+       subtitle = "Commercial Passenger Fixed-Wing Aircraft (2002–2024)",
+       x = "Country", y = "Number of Accidents") +
+  theme_minimal()
+```
 
 ```{r}
 library(ggplot2)
@@ -252,12 +304,12 @@ curated_data %>%
   filter(!is.na(ac_type), ac_type != "") %>%
   mutate(ac_type = str_to_title(trimws(ac_type))) %>%
   count(ac_type, sort = TRUE) %>%
-  slice_max(n, n = 20, with_ties = FALSE) %>%
+  slice_max(n, n = 15, with_ties = FALSE) %>%
   ggplot(aes(x = reorder(ac_type, n), y = n)) +
   geom_col(fill = "darkcyan") +
   coord_flip() +
   labs(
-    title = "Top 20Aircraft Types by Accident Count",
+    title = "Top 15 Aircraft Types by Accident Count",
     subtitle = "Commercial Passenger Fixed-Wing Aircraft (2002–2024)",
     x = "Aircraft Type / Model",
     y = "Number of Accidents"

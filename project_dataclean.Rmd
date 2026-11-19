@@ -37,10 +37,10 @@ curated_data <- raw_data %>%
   ) %>%
   filter(
     !is.na(parsed_date),
-    parsed_date >= ymd("2002-09-01") & parsed_date <= ymd("2024-12-31")
+    parsed_date >= ymd("2002-01-01") & parsed_date <= ymd("2023-12-31")
   )
 
-log_attrition("1. Date Filter (Sep 2002 - Dec 2024)", curated_data)
+log_attrition("1. Date Filter (Jan 2002 - Dec 2023)", curated_data)
 
 
 # 3. Aircraft Type Restriction: Fixed-Wing Only
@@ -127,7 +127,7 @@ log_attrition <- function(step_name, data) {
 }
 
 
-# 2. Date Parsing & Filtering (Sep 2002 - Dec 2024)
+# 2. Date Parsing & Filtering (Jan 2001 - Dec 2023)
 curated_data <- raw_data %>%
   mutate(
     parsed_date = parse_date_time(.data[["date"]], orders = c("ymd", "mdy", "dmy", "Ymd", "m/d/Y")),
@@ -136,10 +136,10 @@ curated_data <- raw_data %>%
   ) %>%
   filter(
     !is.na(parsed_date),
-    parsed_date >= ymd("2002-09-01") & parsed_date <= ymd("2024-12-31")
+    parsed_date >= ymd("2001-01-01") & parsed_date <= ymd("2023-12-31")
   )
 
-log_attrition("1. Date Filter (Sep 2002 - Dec 2024)", curated_data)
+log_attrition("1. Date Filter (Jan 2001 - Dec 2023)", curated_data)
 
 
 # 3. Aircraft Type Restriction: Fixed-Wing Only 
@@ -231,7 +231,7 @@ curated_data %>%
   coord_flip() +
   labs(
     title = "Top 15 Airlines/Carriers by Accident Count",
-    subtitle = "Commercial Passenger Fixed-Wing Aircraft (2002–2024)",
+    subtitle = "Commercial Passenger Fixed-Wing Aircraft (2002–2023)",
     x = "Airline / Carrier",
     y = "Number of Accidents"
   ) +
@@ -310,7 +310,7 @@ curated_data %>%
   coord_flip() +
   labs(
     title = "Top 15 Aircraft Types by Accident Count",
-    subtitle = "Commercial Passenger Fixed-Wing Aircraft (2002–2024)",
+    subtitle = "Commercial Passenger Fixed-Wing Aircraft (2002–2023)",
     x = "Aircraft Type / Model",
     y = "Number of Accidents"
   ) +
@@ -330,10 +330,10 @@ airline_year_panel <- curated_data %>%
   mutate(operator = str_to_title(trimws(operator))) %>%
   # Count actual accidents per airline per year
   count(operator, year, name = "n_accidents") %>%
-  # Expand grid to include all combinations of operators and years (2002-2024)
+  # Expand grid to include all combinations of operators and years (2002-2023)
   complete(
     operator, 
-    year = 2002:2024, 
+    year = 2002:2023, 
     fill = list(n_accidents = 0)
   )
 
@@ -364,7 +364,7 @@ ggplot(airline_year_panel, aes(x = year, y = n_accidents)) +
   geom_jitter(alpha = 0.3, width = 0.2, height = 0.1, color = "darkslateblue") +
   stat_summary(fun = mean, geom = "line", color = "firebrick", linewidth = 1) +
   labs(
-    title = "Observed vs. Model-Predicted Accident Trends (2002–2024)",
+    title = "Observed vs. Model-Predicted Accident Trends (2002–2023)",
     subtitle = "Zero-Inflated Poisson Regression Fit",
     x = "Year",
     y = "Number of Accidents per Airline"

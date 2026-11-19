@@ -1,0 +1,264 @@
+---
+title: "Air Transport Departures, 2002–2023: Data Cleaning and Descriptive Statistics"
+subtitle: "Denominator for accidents per million departures by GDP"
+
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    df_print: kable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width = 9, fig.height = 4.5)
+options(scipen = 999)
+# Base R only: no add-on packages are needed beyond rmarkdown/knitr for knitting.
+fmt <- function(x, d = 0) formatC(x, format = "f", digits = d, big.mark = ",")
+```
+
+# Research question and role of this dataset
+
+**Hypothesis:** Between September 2002 and December 2023, countries with a higher GDP had fewer commercial flight accidents per million departures than countries with a lower GDP.
+
+This file prepares the **denominator** of that rate: annual commercial flight departures by country. Accident counts and GDP are merged in a later stage.
+
+The data come from the World Bank's World Development Indicators, indicator **IS.AIR.DPRT, "Air transport, registered carrier departures worldwide"**. It counts the domestic takeoffs and the takeoffs abroad made by air carriers registered in each country. The underlying source is ICAO, *Civil Aviation Statistics of the World*, plus ICAO staff estimates. One departure is one flight stage, from takeoff to the next landing.
+
+# Data import
+
+Put the World Bank CSV in the same folder as this file, or change `raw_file` below.
+
+```{r import}
+raw_file <- "API_IS.AIR.DPRT_DS2_en_csv_v2_30814.csv"
+out_dir  <- "output"
+dir.create(out_dir, showWarnings = FALSE)
+
+# The first 4 lines are World Bank metadata (source, last-updated date)
+readLines(raw_file, n = 3, encoding = "UTF-8")
+
+raw <- read.csv(raw_file, skip = 4, check.names = FALSE, stringsAsFactors = FALSE,
+                fileEncoding = "UTF-8-BOM")
+# Drop the empty column created by the trailing comma on every line
+raw <- raw[, names(raw) != "" & !grepl("^V[0-9]+$", names(raw))]
+dim(raw)
+range(as.integer(names(raw)[-(1:4)]))
+```
+
+The raw file has `r nrow(raw)` rows (entities) and annual columns from 1960 to 2025.
+
+# Data cleaning
+
+## Step 1: Remove regional, income and lending aggregates
+
+The World Bank file mixes individual economies with groups such as "World", "High income" and "Sub-Saharan Africa". These are sums of country rows and would double-count departures.
+
+```{r aggregates}
+aggregates <- c("AFE","AFW","ARB","CEB","CSS","EAP","EAR","EAS","ECA","ECS","EMU","EUU",
+                "FCS","FCV","HIC","HPC","IBD","IBT","IDA","IDB","IDX","INX","LAC","LCN",
+                "LDC","LIC","LMC","LMY","LTE","MEA","MIC","MNA","NAC","OED","OSS","PRE",
+                "PSS","PST","SAS","SSA","SSF","SST","TEA","TEC","TLA","TMN","TSA","TSS",
+                "UMC","WLD")
+is_agg <- raw$`Country Code` %in% aggregates
+sum(is_agg)                      # aggregate rows removed
+raw$`Country Name`[is_agg]       # what was removed
+countries <- raw[!is_agg, ]
+nrow(countries)                  # economies kept
+```
+
+## Step 2: Restrict to the study period
+
+The indicator is annual, so September to December 2002 cannot be isolated. The window is set to the calendar years 2002 to 2023 (22 years).
+
+```{r period}
+years <- as.character(2002:2023)
+countries <- countries[, c("Country Name", "Country Code", years)]
+```
+
+## Step 3: Reshape to long format, handle missing values, validate and round
+
+Blank cells become `NA` ("not reported"), not zero. Nothing is imputed. Fractional values are ICAO estimates and are rounded to whole flights.
+
+```{r reshape}
+long <- data.frame(
+  `Country Name` = rep(countries$`Country Name`, times = length(years)),
+  `Country Code` = rep(countries$`Country Code`, times = length(years)),
+  Year           = rep(as.integer(years), each = nrow(countries)),
+  Departures     = suppressWarnings(as.numeric(unlist(countries[, years], use.names = FALSE))),
+  check.names = FALSE, stringsAsFactors = FALSE)
+
+n_cells      <- nrow(long)
+n_nonmissing <- sum(!is.na(long$Departures))
+n_fractional <- sum(!is.na(long$Departures) & long$Departures %% 1 != 0)
+n_negative   <- sum(long$Departures < 0, na.rm = TRUE)
+c(cells = n_cells, non_missing = n_nonmissing, fractional = n_fractional, negative = n_negative)
+
+long$Departures[!is.na(long$Departures) & long$Departures < 0] <- NA
+long$Departures <- round(long$Departures)
+long$Departures_millions <- long$Departures / 1e6
+
+coverage <- tapply(!is.na(long$Departures), long$`Country Code`, sum)
+long$Years_reported_2002_2023 <- as.integer(coverage[long$`Country Code`])
+long <- long[order(long$`Country Name`, long$Year), ]
+```
+
+Of `r fmt(n_cells)` country-year cells, `r fmt(n_nonmissing)` hold a value. `r n_fractional` of those (`r round(n_fractional / n_nonmissing * 100, 1)`%) were fractional ICAO estimates and were rounded. `r n_negative` negative values were found.
+
+## Step 4: Save the cleaned data
+
+```{r save}
+write.csv(long, file.path(out_dir, "departures_clean_long_2002_2023.csv"), row.names = FALSE, na = "")
+wide <- reshape(long[, c("Country Name", "Country Code", "Year", "Departures")],
+                idvar = c("Country Name", "Country Code"), timevar = "Year",
+                direction = "wide", sep = "_")
+names(wide) <- sub("^Departures_", "", names(wide))
+write.csv(wide, file.path(out_dir, "departures_clean_wide_2002_2023.csv"), row.names = FALSE, na = "")
+```
+
+# Coverage and completeness
+
+```{r coverage}
+cov_table <- data.frame(
+  Coverage  = c("All 22 years", "15 or more years", "10 to 21 years", "1 to 9 years", "No data"),
+  Countries = c(sum(coverage == 22), sum(coverage >= 15), sum(coverage >= 10 & coverage < 22),
+                sum(coverage >= 1 & coverage < 10), sum(coverage == 0)))
+cov_table$Share_pct <- round(cov_table$Countries / length(coverage) * 100, 1)
+cov_table
+
+cname <- tapply(long$`Country Name`, long$`Country Code`, `[`, 1)
+sort(cname[names(coverage)[coverage == 0]], method = "radix")     # no data
+low <- coverage[coverage >= 1 & coverage < 10]
+setNames(as.integer(low), cname[names(low)])                      # fewer than 10 years
+
+d <- long[!is.na(long$Departures), ]
+d[d$Departures == 0, c("Country Name", "Year")]                   # zero-departure years
+```
+
+# Descriptive statistics
+
+Skewness and excess kurtosis use the adjusted sample estimators (G1, G2), the same as SPSS and Excel. Quartiles use R's default method (type 7).
+
+```{r functions}
+skew_g1 <- function(x) { n <- length(x); m <- mean(x); s <- sd(x)
+  n / ((n - 1) * (n - 2)) * sum(((x - m) / s)^3) }
+kurt_g2 <- function(x) { n <- length(x); m <- mean(x); s <- sd(x)
+  n * (n + 1) / ((n - 1) * (n - 2) * (n - 3)) * sum(((x - m) / s)^4) -
+    3 * (n - 1)^2 / ((n - 2) * (n - 3)) }
+describe <- function(x) c(N = length(x), Total = sum(x), Mean = mean(x), Median = median(x),
+  SD = sd(x), Min = min(x), Q1 = unname(quantile(x, .25)), Q3 = unname(quantile(x, .75)),
+  Max = max(x), Skewness = skew_g1(x), Kurtosis = kurt_g2(x))
+```
+
+## Pooled distribution (all country-years)
+
+```{r pooled}
+pooled <- rbind(Raw   = describe(d$Departures),
+                Log10 = describe(log10(d$Departures[d$Departures > 0])))
+write.csv(round(pooled, 2), file.path(out_dir, "stats_pooled.csv"))
+round(t(pooled), 2)
+```
+
+```{r hist, fig.height=4}
+par(mfrow = c(1, 2), mar = c(4.5, 4.5, 3, 1))
+hist(d$Departures / 1e6, breaks = 60, col = "grey70", border = "white",
+     main = "Raw scale", xlab = "Departures per country-year (millions)")
+hist(log10(d$Departures[d$Departures > 0]), breaks = 40, col = "steelblue", border = "white",
+     main = "Log10 scale", xlab = "log10(departures)")
+```
+
+The raw distribution is extremely right-skewed: the mean (`r fmt(pooled["Raw", "Mean"])`) is about `r round(pooled["Raw", "Mean"] / pooled["Raw", "Median"])` times the median (`r fmt(pooled["Raw", "Median"])`), with skewness `r round(pooled["Raw", "Skewness"], 1)`. On the log10 scale skewness is `r round(pooled["Log10", "Skewness"], 2)` and kurtosis `r round(pooled["Log10", "Kurtosis"], 2)`, close to normal. Use log(departures) in parametric tests and medians to describe groups.
+
+## By year
+
+```{r by-year}
+by_year <- do.call(rbind, lapply(split(d, d$Year), function(g)
+  data.frame(Year = g$Year[1], t(describe(g$Departures)),
+             Top_country = g$`Country Name`[which.max(g$Departures)], check.names = FALSE)))
+by_year$YoY_change_total_pct <- c(NA, diff(by_year$Total) / head(by_year$Total, -1) * 100)
+num <- sapply(by_year, is.numeric); by_year[num] <- round(by_year[num], 1)
+write.csv(by_year, file.path(out_dir, "stats_by_year.csv"), row.names = FALSE, na = "")
+rownames(by_year) <- NULL
+by_year[, c("Year", "N", "Total", "Mean", "Median", "SD", "Max", "YoY_change_total_pct")]
+```
+
+```{r trend-plot}
+par(mar = c(4.5, 4.5, 3, 1))
+plot(by_year$Year, by_year$Total / 1e6, type = "b", pch = 19, col = "steelblue", lwd = 2,
+     ylim = c(0, 40), xlab = "Year", ylab = "Departures (millions)",
+     main = "Total registered-carrier departures, reporting countries")
+rect(2019.5, -5, 2021.5, 45, col = adjustcolor("grey", 0.25), border = NA)
+text(2020.5, 39, "COVID-19", cex = 0.85)
+grid(nx = NA, ny = NULL)
+```
+
+Totals are sums across the countries reporting in each year (`r min(by_year$N)` to `r max(by_year$N)`), so part of the 2010 rise reflects more countries reporting. Departures rose `r round((by_year$Total[by_year$Year == 2019] / by_year$Total[by_year$Year == 2002] - 1) * 100)`% from 2002 to 2019, fell `r abs(round(by_year$YoY_change_total_pct[by_year$Year == 2020]))`% in 2020, and reached `r round(by_year$Total[by_year$Year == 2023] / by_year$Total[by_year$Year == 2019] * 100)`% of the 2019 level by 2023.
+
+## By country
+
+```{r by-country}
+grand_total <- sum(d$Departures)
+by_country <- do.call(rbind, lapply(split(d, d$`Country Code`), function(g) {
+  g <- g[order(g$Year), ]; x <- g$Departures
+  first <- g[1, ]; last <- g[nrow(g), ]; span <- last$Year - first$Year
+  data.frame(`Country Name` = g$`Country Name`[1], `Country Code` = g$`Country Code`[1],
+    Years_reported = length(x), First_year = first$Year, Last_year = last$Year,
+    Total_departures = sum(x), Mean_annual = mean(x), Median_annual = median(x),
+    SD = if (length(x) > 1) sd(x) else NA,
+    CV_pct = if (length(x) > 1 && mean(x) > 0) sd(x) / mean(x) * 100 else NA,
+    Min = min(x), Max = max(x),
+    CAGR_pct = if (span > 0 && first$Departures > 0)
+      ((last$Departures / first$Departures)^(1 / span) - 1) * 100 else NA,
+    Share_of_period_total_pct = sum(x) / grand_total * 100, check.names = FALSE)
+}))
+by_country <- by_country[order(-by_country$Total_departures), ]
+num <- sapply(by_country, is.numeric); by_country[num] <- round(by_country[num], 2)
+write.csv(by_country, file.path(out_dir, "stats_by_country.csv"), row.names = FALSE, na = "")
+rownames(by_country) <- NULL
+
+head(by_country[, c("Country Name", "Mean_annual", "Share_of_period_total_pct", "CAGR_pct")], 10)
+summary(by_country$Mean_annual)
+c(top10_share_pct = sum(head(by_country$Share_of_period_total_pct, 10)),
+  countries_under_10k = sum(by_country$Mean_annual < 10000),
+  countries_over_1M   = sum(by_country$Mean_annual > 1e6))
+```
+
+```{r top-plot, fig.height=5}
+top15 <- head(by_country, 15)
+par(mar = c(4.5, 10, 3, 1))
+barplot(rev(top15$Mean_annual / 1e6), names.arg = rev(top15$`Country Name`), horiz = TRUE,
+        las = 1, col = c(rep("grey70", 14), "steelblue"), border = NA,
+        xlab = "Mean annual departures (millions)", main = "15 largest countries, 2002–2023")
+```
+
+# Data-quality screen
+
+Year-on-year changes larger than 100% (up or down) are flagged for review. They mark pandemic effects, a carrier starting or stopping, or breaks in reporting.
+
+```{r flags}
+lo   <- long[order(long$`Country Code`, long$Year), ]
+prev <- ave(lo$Departures, lo$`Country Code`, FUN = function(v) c(NA, head(v, -1)))
+yoy  <- (lo$Departures / prev - 1) * 100
+flag <- !is.na(yoy) & prev > 0 & abs(yoy) > 100
+flags <- data.frame(`Country Name` = lo$`Country Name`[flag], Year = lo$Year[flag],
+                    Previous_year = prev[flag], Departures = lo$Departures[flag],
+                    YoY_change_pct = round(yoy[flag], 1), check.names = FALSE)
+write.csv(flags, file.path(out_dir, "flag_large_yoy_changes.csv"), row.names = FALSE)
+
+c(flagged = nrow(flags), in_2020_2022 = sum(flags$Year %in% 2020:2022),
+  prior_year_10k_plus = sum(flags$Previous_year >= 10000))
+flags[flags$Previous_year >= 10000, ]
+```
+
+The largest break is Canada, from `r fmt(flags$Previous_year[flags$"Country Name" == "Canada" & flags$Year == 2003])` departures in 2002 to `r fmt(flags$Departures[flags$"Country Name" == "Canada" & flags$Year == 2003])` in 2003, most likely a change in reporting coverage rather than real growth.
+
+# Notes for merging with accident and GDP data
+
+* **Registration basis.** Departures are credited to the country where the airline is registered, not where it flies. Assign accidents by the operator's country of registration too.
+* **Merge keys.** Use `Country Code` (World Bank three-letter code) and `Year`. World Bank GDP data (for example `NY.GDP.PCAP.CD`) shares these codes. Accident data will need country names mapped to them.
+* **Zeros and small countries.** Exclude zero-departure years from rates. Consider a minimum exposure (for example 10,000 departures a year), pooling over the period, or a Poisson / negative binomial model with `log(Departures)` as offset.
+* **COVID-19.** Add a 2020–2021 indicator or report results with and without those years.
+* **Outcome.** `Accidents_per_million = Accidents / Departures_millions`.
+
+```{r session}
+sessionInfo()
+```

@@ -19,7 +19,7 @@ fmt <- function(x, d = 0) formatC(x, format = "f", digits = d, big.mark = ",")
 
 # Research question and role of this dataset
 
-**Hypothesis:** Between September 2002 and December 2023, countries with a higher GDP had fewer commercial flight accidents per million departures than countries with a lower GDP.
+**Hypothesis:** Between January 2002 and December 2023, countries with a higher GDP had fewer commercial flight accidents per million departures than countries with a lower GDP.
 
 This file prepares the **denominator** of that rate: annual commercial flight departures by country. Accident counts and GDP are merged in a later stage.
 
@@ -27,14 +27,13 @@ The data come from the World Bank's World Development Indicators, indicator **IS
 
 # Data import
 
-Put the World Bank CSV in the same folder as this file, or change `raw_file` below.
 
 ```{r import}
 raw_file <- "API_IS.AIR.DPRT_DS2_en_csv_v2_30814.csv"
 out_dir  <- "output"
 dir.create(out_dir, showWarnings = FALSE)
 
-# The first 4 lines are World Bank metadata (source, last-updated date)
+# The first 4 lines are World Bank metadata 
 readLines(raw_file, n = 3, encoding = "UTF-8")
 
 raw <- read.csv(raw_file, skip = 4, check.names = FALSE, stringsAsFactors = FALSE,
@@ -68,7 +67,6 @@ nrow(countries)                  # economies kept
 
 ## Step 2: Restrict to the study period
 
-The indicator is annual, so September to December 2002 cannot be isolated. The window is set to the calendar years 2002 to 2023 (22 years).
 
 ```{r period}
 years <- as.character(2002:2023)
@@ -251,13 +249,6 @@ flags[flags$Previous_year >= 10000, ]
 
 The largest break is Canada, from `r fmt(flags$Previous_year[flags$"Country Name" == "Canada" & flags$Year == 2003])` departures in 2002 to `r fmt(flags$Departures[flags$"Country Name" == "Canada" & flags$Year == 2003])` in 2003, most likely a change in reporting coverage rather than real growth.
 
-# Notes for merging with accident and GDP data
-
-* **Registration basis.** Departures are credited to the country where the airline is registered, not where it flies. Assign accidents by the operator's country of registration too.
-* **Merge keys.** Use `Country Code` (World Bank three-letter code) and `Year`. World Bank GDP data (for example `NY.GDP.PCAP.CD`) shares these codes. Accident data will need country names mapped to them.
-* **Zeros and small countries.** Exclude zero-departure years from rates. Consider a minimum exposure (for example 10,000 departures a year), pooling over the period, or a Poisson / negative binomial model with `log(Departures)` as offset.
-* **COVID-19.** Add a 2020–2021 indicator or report results with and without those years.
-* **Outcome.** `Accidents_per_million = Accidents / Departures_millions`.
 
 ```{r session}
 sessionInfo()

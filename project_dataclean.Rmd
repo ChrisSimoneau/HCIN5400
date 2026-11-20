@@ -5,8 +5,9 @@ date: "2026-10-18"
 output: html_document
 ---
 
-```{r}
 
+
+```{r}
 library(tidyverse)
 library(lubridate)
 
@@ -14,7 +15,7 @@ library(lubridate)
 input_file <- "C:/Users/cpeng/Downloads/archive/accident_details_compiled.csv"
 raw_data <- read_csv(input_file, show_col_types = FALSE)
 
-# Automatically normalize column names (lowercase, replace special chars with underscores)
+# Automatically normalize column names
 names(raw_data) <- tolower(gsub("[^[:alnum:]]+", "_", names(raw_data)))
 
 # Initialize attrition tracking log
@@ -28,106 +29,7 @@ log_attrition <- function(step_name, data) {
 }
 
 
-# 2. Date Parsing & Filtering (Sep 2002 - Dec 2024)
-curated_data <- raw_data %>%
-  mutate(
-    parsed_date = parse_date_time(.data[["date"]], orders = c("ymd", "mdy", "dmy", "Ymd", "m/d/Y")),
-    year = year(parsed_date),
-    month = month(parsed_date)
-  ) %>%
-  filter(
-    !is.na(parsed_date),
-    parsed_date >= ymd("2002-01-01") & parsed_date <= ymd("2023-12-31")
-  )
-
-log_attrition("1. Date Filter (Jan 2002 - Dec 2023)", curated_data)
-
-
-# 3. Aircraft Type Restriction: Fixed-Wing Only
-non_fixed_wing_regex <- "helicopter|rotorcraft|balloon|airship|glider|paramotor|ultralight|dirigible|autogyro|gyroplane"
-
-curated_data <- curated_data %>%
-  filter(
-    !str_detect(coalesce(.data[["ac_type"]], ""), regex(non_fixed_wing_regex, ignore_case = TRUE))
-  )
-
-log_attrition("2. Fixed-Wing Aircraft Isolation", curated_data)
-
-
-# 4. Exclusion Criteria: anything non commercial
-excluded_keywords_regex <- paste(
-  c(
-    "military", "air force", "army", "navy", "marines", "government", "state", "police",
-    "cargo", "freight", "postal", "mail", "dhl", "fedex", "ups","USMC",
-    "ambulance", "medevac", "medical",
-    "training", "instruction", "test flight", "ferry", "positioning", "delivery",
-    "firefighting", "survey", "mapping", "skydiving", "parachute", "crop dust", "agricultural",
-    "private", "corporate", "recreational", "personal", "pleasure", "unauthorized"
-  ),
-  collapse = "|"
-)
-
-curated_data <- curated_data %>%
-  filter(
-    !str_detect(coalesce(.data[["operator"]], ""), regex(excluded_keywords_regex, ignore_case = TRUE)),
-    !str_detect(coalesce(.data[["summary"]], ""), regex(excluded_keywords_regex, ignore_case = TRUE))
-  )
-
-log_attrition("3. Mission & Operation Exclusions (Cargo, Military, Medevac, Private, etc.)", curated_data)
-
-
-# 5. Passenger Manifest Filter: Exclude Zero-Passenger / Crew-Only Manifests
-curated_data <- curated_data %>%
-  mutate(
-    total_aboard = parse_number(.data[["aboard"]]),
-    is_crew_only = str_detect(.data[["aboard"]], "passengers:\\s*0")
-  ) %>%
-  filter(
-    !is.na(total_aboard),
-    total_aboard > 0,
-    is_crew_only == FALSE
-  ) %>%
-  select(-total_aboard, -is_crew_only) # Clean up temporary helper columns
-
-log_attrition("4. Passenger Manifest Filter (Aboard > 0 & Non-Crew-Only)", curated_data)
-
-
-# 6. Deduplication...if this is a word?
-curated_data <- curated_data %>% distinct()
-log_attrition("5. Deduplication & Final Polish", curated_data)
-
-# Print Summary Table
-cat("\n--- DATA CURATION ATTRITION SUMMARY ---\n")
-print(attrition_log)
-
-
-```
-
-
-
-```{r}
-library(tidyverse)
-library(lubridate)
-
-# Load Dataset
-input_file <- "C:/Users/cpeng/Downloads/archive/accident_details_compiled.csv"
-raw_data <- read_csv(input_file, show_col_types = FALSE)
-
-# Automatically normalize column names (lowercase, replace special chars with underscores)
-names(raw_data) <- tolower(gsub("[^[:alnum:]]+", "_", names(raw_data)))
-
-# Initialize attrition tracking log
-attrition_log <- tibble(
-  Step = "0. Raw Dataset",
-  Records = nrow(raw_data)
-)
-
-log_attrition <- function(step_name, data) {
-  attrition_log <<- bind_rows(attrition_log, tibble(Step = step_name, Records = nrow(data)))
-}
-
-
-# 2. Date Parsing & Filtering (Jan 2001 - Dec 2023)
+# 2. Date parsing (Jan 2001 - Dec 2023)
 curated_data <- raw_data %>%
   mutate(
     parsed_date = parse_date_time(.data[["date"]], orders = c("ymd", "mdy", "dmy", "Ymd", "m/d/Y")),
@@ -142,7 +44,7 @@ curated_data <- raw_data %>%
 log_attrition("1. Date Filter (Jan 2001 - Dec 2023)", curated_data)
 
 
-# 3. Aircraft Type Restriction: Fixed-Wing Only 
+# 3. Aircraft Restriction: Fixed-Wing Only...no other fancy stuff
 non_fixed_wing_regex <- paste(
   c(
     "helicopter", "helicóptero", "rotorcraft", "balloon", "airship", "glider", 
@@ -160,7 +62,7 @@ curated_data <- curated_data %>%
 log_attrition("2. Fixed-Wing Aircraft Isolation", curated_data)
 
 
-# 4. Exclusion Criteria: Non-Commercial, Non-Scheduled & Air Taxis
+# Exclusion Criteria: Non-Commercial, non-scheduled & air taxis, and everything else
 excluded_keywords_regex <- paste(
   c(
     "military", "air force", "army", "navy", "marines", "government", "state", "police",
@@ -183,7 +85,7 @@ curated_data <- curated_data %>%
 log_attrition("3. Mission & Operation Exclusions (Cargo, Military, Air Taxi, Private, etc.)", curated_data)
 
 
-# 5. Passenger Manifest Filter: Exclude Zero-Passenger / Crew-Only Manifests
+# 5.Exclude Zero-Passenger/Crew Only Manifests
 curated_data <- curated_data %>%
   mutate(
     total_aboard = parse_number(.data[["aboard"]]),
@@ -207,11 +109,8 @@ log_attrition("5. Deduplication & Final Polish", curated_data)
 cat("\n--- DATA CURATION ATTRITION SUMMARY ---\n")
 print(attrition_log)
 
-# Export Result
-output_file <- "C:/Users/cpeng/Downloads/archive/commercial_passenger_fixedwing_accidents_2002_2024.csv"
-write_csv(curated_data, output_file)
-
-cat("\nSuccess! Saved curated dataset to:\n", output_file, "\n")
+# curated_data
+cat("\nCuration complete:", nrow(curated_data), "records in curated_data\n")
 ```
 
 
@@ -241,7 +140,7 @@ curated_data %>%
 library(tidyverse)
 library(jsonlite)
 
-# ---- 1. Load & clean the airline -> country lookup ----
+#Load & clean the airline -> country lookup
 norm_name <- function(x) {
   x %>%
     str_to_lower() %>%
@@ -252,7 +151,7 @@ norm_name <- function(x) {
 
 airline_lookup <- fromJSON("C:/Users/cpeng/Desktop/airlines_by_country.json") %>% ## copy path did not work apparently slashes were backwards?
   as_tibble() %>%
-  # drop the ints
+  # drop the ints from .json because webscrapper scrapped a little too much oops
   filter(!str_detect(Airline_URL, "/photos/"),
          !str_detect(Airline, "^[0-9,]+$")) %>%
   mutate(key = norm_name(Airline)) %>%
@@ -262,13 +161,13 @@ airline_lookup <- fromJSON("C:/Users/cpeng/Desktop/airlines_by_country.json") %>
             ambiguous = n_distinct(Country) > 1,
             .groups = "drop")
 
-# ---- 2. Join crashes to country ----
+# Join crashes to country
 crashes_country <- curated_data %>%
   filter(!is.na(operator), operator != "") %>%
   mutate(key = norm_name(operator)) %>%
   left_join(airline_lookup, by = "key")
 
-# ---- 3. Peekaboo at crash matching ----
+#Peekaboo at crash matching
 cat("Matched:", sum(!is.na(crashes_country$Country)), "of", nrow(crashes_country), "\n")
 
 crashes_country %>%
@@ -276,7 +175,7 @@ crashes_country %>%
   count(operator, sort = TRUE) %>%
   head(30)          
 
-# ---- 4. Crashes by country ----
+#Crashes by country
 country_counts <- crashes_country %>%
   filter(!is.na(Country)) %>%
   count(Country, sort = TRUE)
@@ -324,7 +223,7 @@ library(pscl)
 library(tidyverse)
 library(lubridate)
 
-# 1. Create a complete panel of Airline x Year to capture zero-accident periods
+
 airline_year_panel <- curated_data %>%
   filter(!is.na(operator), operator != "") %>%
   mutate(operator = str_to_title(trimws(operator))) %>%

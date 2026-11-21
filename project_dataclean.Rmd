@@ -8,109 +8,110 @@ output: html_document
 
 
 ```{r}
+
 library(tidyverse)
 library(lubridate)
 
-# Load Dataset
+# ---- Load dataset (no file.choose(): it can't run when knitting) ----
 input_file <- "C:/Users/cpeng/Downloads/archive/accident_details_compiled.csv"
 raw_data <- read_csv(input_file, show_col_types = FALSE)
 
-# Automatically normalize column names
-names(raw_data) <- tolower(gsub("[^[:alnum:]]+", "_", names(raw_data)))
+# Standardise column names (raw file has "Flight #", "AC Type", "cn / ln", etc.)
+names(raw_data) <- c("source", "date", "time", "location", "operator", "flight_no",
+                     "route", "ac_type", "registration", "cn_ln", "aboard",
+                     "fatalities", "ground", "summary")
 
-# Initialize attrition tracking log
-attrition_log <- tibble(
-  Step = "0. Raw Dataset",
-  Records = nrow(raw_data)
-)
+# ---- Keyword patterns (case-insensitive) ----
+rx <- function(x) regex(paste(x, collapse = "|"), ignore_case = TRUE)
 
-log_attrition <- function(step_name, data) {
-  attrition_log <<- bind_rows(attrition_log, tibble(Step = step_name, Records = nrow(data)))
-}
+military_op <- rx(c("^\\s*mil+i?tary", "/\\s*military", "air ?force", "\\barmy\\b",
+                    "\\bnavy\\b", "naval", "marine corps", "\\bUSAF\\b", "\\bRAF\\b",
+                    "\\bIAF\\b", "national guard", "luftwaffe", "luftstreitkr",
+                    "defen[sc]e", "ministry of", "fuerza\\s+a", "ej[eé]rcito",
+                    "armada", "aeronautica militare?", "\\bforce\\b", "soviet air"))
+military_sum <- rx(c("military (flight|aircraft|transport|plane)",
+                     "air force (plane|aircraft|transport)"))
 
+helicopter_ac <- rx(c("helicopter", "rotor", "rotocraft", "copter", "ecureuil",
+                      "\\bMi-?\\d", "\\bMil\\b", "sikors", "\\bAS[- ]?3\\d\\d",
+                      "\\bSA ?3\\d\\d", "\\bBell\\b", "robinson", "agusta",
+                      "\\bEC[- ]?\\d{3}", "\\bBO[- ]?105", "\\bS-?(58|61|64|70|76|92)\\b",
+                      "puma", "chinook", "vertol", "alouette", "frelon",
+                      "\\bUH-?\\d", "\\bCH-?\\d", "\\bAW ?\\d{3}", "hughes", "\\bMD ?500"))
 
-# 2. Date parsing (Jan 2001 - Dec 2023)
-curated_data <- raw_data %>%
+non_airplane_ac <- rx(c("balloon", "blimp", "airship", "glider", "zeppelin"))
+
+cargo_op  <- rx(c("cargo", "freight", "parcel", "courier", "\\bmail\\b", "\\bFedEx\\b",
+                  "\\bUPS\\b", "\\bDHL\\b", "aeropostale", "air ?lift"))
+cargo_sum <- rx(c("cargo (plane|flight|aircraft)", "freighter", "all[- ]cargo",
+                  "carrying cargo", "mail (plane|flight)"))
+
+govt_op <- rx(c("government", "presidential", "police", "united nations", "\\bUN\\b",
+                "red cross", "border (guard|patrol)", "customs", "emergency (ministry|situations)",
+                "emercom", "\\bFAA\\b", "\\bNASA\\b", "forest service", "state aviation",
+                "royal flight"))
+
+surveillance_kw <- rx(c("surveillance (flight|mission|aircraft|plane)", "reconnaissance",
+                        "aerial survey", "survey flight", "aerial photograph", "\\bspy\\b",
+                        "intelligence", "news (helicopter|plane|aircraft)"))
+
+private_op <- rx(c("(^|-\\s*)private", "charter", "taxi", "air ambulance",
+                   "flying (club|service)", "illegal flight"))
+illegal_sum <- rx(c("illegal", "unauthori[sz]ed", "unlicensed", "unregistered", "smuggl",
+                    "drug (smuggl|traffick|flight|run)", "narcotic", "contraband",
+                    "clandestine", "stolen|steal"))
+
+non_revenue_kw <- rx(c("test flight", "training flight", "ferry flight", "positioning flight",
+                       "delivery flight", "demonstration flight", "air show", "flight test",
+                       "maintenance flight", "demonstration", "\\btest\\b"))
+
+# ---- Parse passengers / crew from 'aboard' and tag each row ----
+flagged <- raw_data %>%
   mutate(
-    parsed_date = parse_date_time(.data[["date"]], orders = c("ymd", "mdy", "dmy", "Ymd", "m/d/Y")),
-    year = year(parsed_date),
-    month = month(parsed_date)
+    across(c(operator, route, ac_type, summary), ~ replace_na(as.character(.x), "")),
+    aboard_total = suppressWarnings(as.numeric(str_extract(aboard, "^\\s*\\d+"))),
+    passengers   = suppressWarnings(as.numeric(str_match(aboard, "passengers:\\s*(\\d+)")[, 2])),
+    crew         = suppressWarnings(as.numeric(str_match(aboard, "crew:\\s*(\\d+)")[, 2])),
+    date_parsed  = mdy(date),
+    year         = year(date_parsed)
   ) %>%
-  filter(
-    !is.na(parsed_date),
-    parsed_date >= ymd("2001-01-01") & parsed_date <= ymd("2023-12-31")
-  )
+  # ---- Restrict to 2002-01-01 through 2023-12-31 ----
+  filter(!is.na(date_parsed),
+         date_parsed >= as.Date("2002-01-01"),
+         date_parsed <= as.Date("2023-12-31")) %>%
+  # ---- First matching rule wins; NA = keep ----
+  mutate(excluded_because = case_when(
+    str_detect(operator, military_op) | str_detect(summary, military_sum) ~ "Military aviation",
+    str_detect(ac_type, helicopter_ac) | str_detect(summary, regex("helicopter", ignore_case = TRUE)) ~ "Helicopter",
+    str_detect(ac_type, non_airplane_ac)                                   ~ "Balloon / airship / glider",
+    str_detect(operator, cargo_op) | str_detect(summary, cargo_sum)        ~ "Cargo flight",
+    passengers == 0 |
+      (is.na(passengers) & !is.na(aboard_total) & !is.na(crew) & aboard_total == crew) ~ "No passengers",
+    str_detect(operator, govt_op)                                          ~ "Government flight",
+    str_detect(paste(operator, route, summary), surveillance_kw)           ~ "Surveillance mission",
+    str_detect(operator, private_op) | str_detect(summary, illegal_sum)    ~ "Private / charter / illegal",
+    str_detect(route, non_revenue_kw) | str_detect(summary, non_revenue_kw) ~ "Test / ferry / training",
+    operator %in% c("", "?", "-")                                          ~ "Unknown operator",
+    TRUE ~ NA_character_
+  ))
 
-log_attrition("1. Date Filter (Jan 2001 - Dec 2023)", curated_data)
+# ---- Result tables ----
+commercial_pax <- flagged %>% filter(is.na(excluded_because)) %>% select(-excluded_because)
+all_excluded   <- flagged %>% filter(!is.na(excluded_because))
 
-
-# 3. Aircraft Restriction: Fixed-Wing Only...no other fancy stuff
-non_fixed_wing_regex <- paste(
-  c(
-    "helicopter", "helicóptero", "rotorcraft", "balloon", "airship", "glider", 
-    "paramotor", "ultralight", "dirigible", "autogyro", "gyroplane",
-    "sikorsky", "bell", "eurocopter", "agusta", "robinson", "airbus helicopters"
-  ),
-  collapse = "|"
-)
-
-curated_data <- curated_data %>%
-  filter(
-    !str_detect(coalesce(.data[["ac_type"]], ""), regex(non_fixed_wing_regex, ignore_case = TRUE))
-  )
-
-log_attrition("2. Fixed-Wing Aircraft Isolation", curated_data)
-
-
-# Exclusion Criteria: Non-Commercial, non-scheduled & air taxis, and everything else
-excluded_keywords_regex <- paste(
-  c(
-    "military", "air force", "army", "navy", "marines", "government", "state", "police",
-    "cargo", "freight", "postal", "mail", "dhl", "fedex", "ups", "USMC",
-    "ambulance", "medevac", "medical",
-    "training", "instruction", "test flight", "ferry", "positioning", "delivery",
-    "firefighting", "survey", "mapping", "skydiving", "parachute", "crop dust", "agricultural",
-    "private", "corporate", "recreational", "personal", "pleasure", "unauthorized",
-    "taxi aereo", "táxi aéreo", "air taxi", "charter"
-  ),
-  collapse = "|"
-)
-
-curated_data <- curated_data %>%
-  filter(
-    !str_detect(coalesce(.data[["operator"]], ""), regex(excluded_keywords_regex, ignore_case = TRUE)),
-    !str_detect(coalesce(.data[["summary"]], ""), regex(excluded_keywords_regex, ignore_case = TRUE))
-  )
-
-log_attrition("3. Mission & Operation Exclusions (Cargo, Military, Air Taxi, Private, etc.)", curated_data)
+# ---- Summary ----
+cat("Rows in raw file:                      ", nrow(raw_data), "\n")
+cat("Rows in date range (before exclusions):", nrow(flagged), "\n")
+cat("Rows after exclusions:                 ", nrow(commercial_pax), "\n\n")
+all_excluded %>% count(excluded_because, sort = TRUE) %>% print()
 
 
-# 5.Exclude Zero-Passenger/Crew Only Manifests
-curated_data <- curated_data %>%
-  mutate(
-    total_aboard = parse_number(.data[["aboard"]]),
-    is_crew_only = str_detect(.data[["aboard"]], "passengers:\\s*0")
-  ) %>%
-  filter(
-    !is.na(total_aboard),
-    total_aboard > 0,
-    is_crew_only == FALSE
-  ) %>%
-  select(-total_aboard, -is_crew_only) # Clean up temporary helper columns
 
-log_attrition("4. Passenger Manifest Filter (Aboard > 0 & Non-Crew-Only)", curated_data)
+# Dataset used by all later chunks
+curated_data <- commercial_pax %>%
+  distinct(date, operator, registration, location, .keep_all = TRUE)
 
-
-# 6. Deduplication
-curated_data <- curated_data %>% distinct()
-log_attrition("5. Deduplication & Final Polish", curated_data)
-
-# Print Summary Table
-cat("\n--- DATA CURATION ATTRITION SUMMARY ---\n")
-print(attrition_log)
-
-# curated_data
-cat("\nCuration complete:", nrow(curated_data), "records in curated_data\n")
+cat("Rows in curated_data:", nrow(curated_data), "\n")
 ```
 
 
@@ -270,4 +271,3 @@ ggplot(airline_year_panel, aes(x = year, y = n_accidents)) +
   ) +
   theme_minimal()
 ```
-

@@ -143,68 +143,184 @@ cat("Rows after exclusions:", nrow(commercial_pax), "\n")
 ```
 
 
-```{r}
-library(ggplot2)
-library(dplyr)
-library(stringr)
 
-# Tally top 15 airlines/carriers and visualize
-curated_data %>%
-  filter(!is.na(operator), operator != "") %>%
-  mutate(operator = str_to_title(trimws(operator))) %>%
-  count(operator, sort = TRUE) %>%
-  slice_max(n, n = 15, with_ties = FALSE) %>%
-  ggplot(aes(x = reorder(operator, n), y = n)) +
-  geom_col(fill = "darkslateblue") +
-  coord_flip() +
-  labs(
-    title = "Top 15 Airlines/Carriers by Accident Count",
-    subtitle = "Commercial Passenger Fixed-Wing Aircraft (2002–2023)",
-    x = "Airline / Carrier",
-    y = "Number of Accidents"
-  ) +
-  theme_minimal()
-```
 ```{r}
 library(tidyverse)
 library(jsonlite)
+library(stringi)
 
-#Load & clean the airline -> country lookup
+# helper 
 norm_name <- function(x) {
   x %>%
+    stri_trans_general("Latin-ASCII") %>%      # Aérea -> Aerea, Türkiye -> Turkiye
     str_to_lower() %>%
     str_replace_all("&", " and ") %>%
-    str_replace_all("[^[:alnum:] ]", " ") %>%
+    str_replace_all("[^a-z0-9 ]", " ") %>%
     str_squish()
 }
 
-airline_lookup <- fromJSON("C:/Users/cpeng/Desktop/airlines_by_country.json") %>% ## copy path did not work apparently slashes were backwards?
-  as_tibble() %>%
-  # drop the ints from .json because webscrapper scrapped a little too much oops
-  filter(!str_detect(Airline_URL, "/photos/"),
-         !str_detect(Airline, "^[0-9,]+$")) %>%
-  mutate(key = norm_name(Airline)) %>%
-  # edge case testing
-  group_by(key) %>%
-  summarise(Country = first(Country),
-            ambiguous = n_distinct(Country) > 1,
-            .groups = "drop")
+# Generic words dropped
+generic_words <- "\\b(airlines?|airways?|air ?lines?|aviation|aviacion|aereas?|inc|ltd|ltda|llc|corp|company|co|sa|sas|pty|limited|the|international|services?|enterprise|express)\\b"
+strip_generic <- function(x) str_squish(str_replace_all(x, generic_words, " "))
 
-# Join crashes to country
+# language cleaner
+clean_operator <- function(x) x %>% str_remove_all("\\(.*?\\)") %>% str_remove("/.*$") %>% str_squish()
+
+# path to filke can change
+json_file <- "C:/Users/cpeng/Desktop/airlines_by_country.json"
+
+if (!file.exists(json_file)) {
+  stop("Can't find the JSON file at: ", json_file,
+       "\nR is looking from this folder: ", getwd(),
+       "\nPut the file there or use the full path.")
+}
+
+rm(list = intersect("raw_lookup", ls()))          # clear any stale object with this name
+raw_lookup <- fromJSON(json_file) %>% as_tibble() # <- this is the line that was missing
+stopifnot(is.data.frame(raw_lookup), all(c("Country", "Airline", "Airline_URL") %in% names(raw_lookup)))
+
+# The URL ends in the real airline name 
+url_name <- function(u) {
+  slug <- str_match(u, "/airline/([^/?#]+)")[, 2]
+  slug <- vapply(replace_na(slug, ""), utils::URLdecode, character(1), USE.NAMES = FALSE)
+  str_replace_all(slug, "-", " ")
+}
+
+airline_names <- bind_rows(
+  # names as listed in the scrape (excluding the photo counts like "94")
+  raw_lookup %>%
+    filter(!str_detect(Airline, "^[0-9,]+$")) %>%
+    transmute(Country, name = Airline),
+  # names recovered from the URL slug
+  raw_lookup %>%
+    transmute(Country, name = url_name(Airline_URL))
+) %>%
+  filter(!is.na(name), name != "") %>%
+  distinct(Country, name) %>%
+  mutate(key = norm_name(name), key_generic = strip_generic(key))
+
+# One row per name
+lookup_exact <- airline_names %>%
+  filter(nchar(key) > 1) %>%
+  group_by(key) %>%
+  summarise(countries = list(sort(unique(Country))), .groups = "drop")
+
+lookup_generic <- airline_names %>%
+  filter(nchar(key_generic) > 1) %>%
+  group_by(key = key_generic) %>%
+  summarise(countries = list(sort(unique(Country))), .groups = "drop")
+
+lookup_candidates <- function(keys, lookup) lookup$countries[match(keys, lookup$key)]
+
+# If a name appears under several countries, only accept 1
+pick_country <- function(candidates, reg_c) {
+  map2_chr(candidates, reg_c, function(cs, r) {
+    if (is.null(cs)) NA_character_
+    else if (length(cs) == 1) cs
+    else if (!is.na(r) && r %in% cs) r
+    else NA_character_
+  })
+}
+
+# ---------- 2. ICAO nationality marks ----------
+reg_prefix_country <- c(
+  "N"="United States","AA"="United States","K"="United States","W"="United States",
+  "A2"="Botswana","A3"="Tonga","A40"="Oman","A5"="Bhutan","A6"="United Arab Emirates","A7"="Qatar","A9C"="Bahrain","AP"="Pakistan",
+  "B"="China","BH"="Hong Kong","BK"="Hong Kong","BL"="Hong Kong","BM"="Macao",
+  "C"="Canada","C2"="Naoero","C3"="Andorra","C5"="Gambia","C6"="Bahamas","C9"="Mozambique","CC"="Chile","CN"="Morocco","CP"="Bolivia","CS"="Portugal","CU"="Cuba","CX"="Uruguay",
+  "D"="Germany","D2"="Angola","D4"="Cape Verde","D6"="Comoros","DQ"="Fiji","E3"="Eritrea","E5"="Cook Islands","E7"="Bosnia And Herzegovina",
+  "EC"="Spain","EI"="Ireland","EK"="Armenia","EP"="Iran, Islamic Republic Of","ER"="Moldova, Republic Of","ES"="Estonia","ET"="Ethiopia","EW"="Belarus","EX"="Kyrgyzstan","EY"="Tajikistan","EZ"="Turkmenistan",
+  "F"="France","FO"="French Polynesia","G"="United Kingdom",
+  "H4"="Solomon Islands","HA"="Hungary","HB"="Switzerland","HC"="Ecuador","HH"="Haiti","HI"="Dominican Republic","HK"="Colombia","HL"="Korea, Republic Of","HP"="Panama","HR"="Honduras","HS"="Thailand","HZ"="Saudi Arabia",
+  "I"="Italy","J2"="Djibouti","J3"="Grenada","J5"="Guinea-Bissau","J6"="Saint Lucia","J7"="Dominica","J8"="Saint Vincent And The Grenadines","JA"="Japan","JY"="Jordan",
+  "LN"="Norway","LV"="Argentina","LQ"="Argentina","LX"="Luxembourg","LY"="Lithuania","LZ"="Bulgaria",
+  "OB"="Peru","OD"="Lebanon","OE"="Austria","OH"="Finland","OK"="Czechia","OM"="Slovakia","OO"="Belgium","OY"="Denmark",
+  "P"="Korea, Democratic People's Republic Of","P2"="Papua New Guinea","P4"="Aruba","PH"="Netherlands","PJ"="Netherlands Antilles","PK"="Indonesia",
+  "PP"="Brazil","PR"="Brazil","PS"="Brazil","PT"="Brazil","PU"="Brazil","PZ"="Suriname",
+  "RA"="Russian Federation","RF"="Russian Federation","CCCP"="Russian Federation","RDPL"="Lao People's Democratic Republic","RP"="Philippines",
+  "S2"="Bangladesh","S5"="Slovenia","S7"="Seychelles","S9"="Sao Tome And Principe","SE"="Sweden","SP"="Poland","ST"="Sudan","SU"="Egypt","SX"="Greece",
+  "T2"="Tuvalu","T3"="Kiribati","T7"="San Marino","T8"="Palau","TC"="Türkiye","TF"="Iceland","TG"="Guatemala","TI"="Costa Rica","TJ"="Cameroon",
+  "TL"="Central African Republic","TN"="Congo","TR"="Gabon","TS"="Tunisia","TT"="Chad","TU"="Cote d'Ivoire","TY"="Benin","TZ"="Mali",
+  "UK"="Uzbekistan","UN"="Kazakhstan","UP"="Kazakhstan","UR"="Ukraine",
+  "V2"="Antigua And Barbuda","V3"="Belize","V4"="Saint Kitts And Nevis","V5"="Namibia","V6"="Micronesia, Federated States Of","V7"="Marshall Islands","V8"="Brunei Darussalam",
+  "VH"="Australia","VN"="Viet Nam","VP"="United Kingdom","VPB"="Bermuda","VPC"="Cayman Islands","VPG"="Gibraltar","VQ"="United Kingdom","VQT"="Turks And Caicos Islands","VT"="India",
+  "XA"="Mexico","XB"="Mexico","XC"="Mexico","XT"="Burkina Faso","XU"="Cambodia","XY"="Myanmar","XZ"="Myanmar",
+  "YA"="Afghanistan","YI"="Iraq","YJ"="Vanuatu","YK"="Syrian Arab Republic","YL"="Latvia","YN"="Nicaragua","YR"="Romania","YS"="El Salvador","YU"="Serbia","YV"="Venezuela",
+  "Z"="Zimbabwe","Z3"="North Macedonia","ZA"="Albania","ZK"="New Zealand","ZP"="Paraguay","ZS"="South Africa",
+  "3A"="Monaco","3B"="Mauritius","3C"="Equatorial Guinea","3D"="Eswatini","3X"="Guinea","4K"="Azerbaijan","4L"="Georgia","4O"="Montenegro","4R"="Sri Lanka","4X"="Israel",
+  "5A"="Libya","5B"="Cyprus","5H"="Tanzania, United Republic Of","5N"="Nigeria","5R"="Madagascar","5T"="Mauritania","5U"="Niger","5V"="Togo","5W"="Samoa","5X"="Uganda","5Y"="Kenya",
+  "6O"="Somalia","6V"="Senegal","6Y"="Jamaica","7O"="Yemen","7P"="Lesotho","7Q"="Malawi","7T"="Algeria","8P"="Barbados","8Q"="Maldives","8R"="Guyana",
+  "9A"="Croatia","9G"="Ghana","9H"="Malta","9J"="Zambia","9K"="Kuwait","9L"="Sierra Leone","9M"="Malaysia","9N"="Nepal",
+  "9Q"="Congo, The Democratic Republic Of The","9S"="Congo, The Democratic Republic Of The","9U"="Burundi","9V"="Singapore","9XR"="Rwanda","9Y"="Trinidad And Tobago"
+)
+
+reg_to_country <- function(reg) {
+  r <- str_remove_all(str_to_upper(replace_na(as.character(reg), "")), "[^A-Z0-9]")   # "C-GPCD" -> "CGPCD"
+  by_prefix <- coalesce(unname(reg_prefix_country[substr(r, 1, 4)]),   # longest prefix wins
+                        unname(reg_prefix_country[substr(r, 1, 3)]),
+                        unname(reg_prefix_country[substr(r, 1, 2)]),
+                        unname(reg_prefix_country[substr(r, 1, 1)]))
+  case_when(r == ""                    ~ NA_character_,
+            str_detect(r, "^B\\d{5}$") ~ "Taiwan",          # Taiwan uses 5-digit B-xxxxx
+            str_detect(r, "^N\\d")     ~ "United States",
+            TRUE                       ~ by_prefix)
+}
+
+# Edge cases
+manual_overrides <- tribble(
+  ~pattern,    ~country,
+  "^comair$",  "United States",       # lookup wrongly gives Comair (South Africa)
+  "metrojet",  "Russian Federation"   # Kogalymavia / Metrojet
+)
+manual_country <- function(op) {
+  out <- rep(NA_character_, length(op))
+  for (i in rev(seq_len(nrow(manual_overrides)))) {
+    hit <- str_detect(op, regex(manual_overrides$pattern[i], ignore_case = TRUE))
+    out[hit] <- manual_overrides$country[i]
+  }
+  out
+}
+
+# JOin Crash and country
 crashes_country <- curated_data %>%
   filter(!is.na(operator), operator != "") %>%
-  mutate(key = norm_name(operator)) %>%
-  left_join(airline_lookup, by = "key")
+  mutate(
+    key_full    = norm_name(operator),
+    key_clean   = norm_name(clean_operator(operator)),
+    key_generic = strip_generic(key_clean),
+    reg_country = reg_to_country(registration),
 
-#Peekaboo at crash matching
-cat("Matched:", sum(!is.na(crashes_country$Country)), "of", nrow(crashes_country), "\n")
+    c_manual = manual_country(operator),
+    c_exact  = pick_country(lookup_candidates(key_full,    lookup_exact),   reg_country),
+    c_clean  = pick_country(lookup_candidates(key_clean,   lookup_exact),   reg_country),
+    c_fuzzy  = pick_country(lookup_candidates(key_generic, lookup_generic), reg_country),
+    c_fuzzy  = if_else(c_fuzzy == reg_country, c_fuzzy, NA_character_),   # fuzzy only trusted if registry agrees
 
+    Country = coalesce(c_manual, c_exact, c_clean, c_fuzzy, reg_country),
+    country_source = case_when(
+      !is.na(c_manual)      ~ "manual override",
+      !is.na(c_exact)       ~ "airline list: exact name",
+      !is.na(c_clean)       ~ "airline list: cleaned name",
+      !is.na(c_fuzzy)       ~ "airline list: fuzzy name (confirmed by registration)",
+      !is.na(reg_country)   ~ "registration prefix",
+      TRUE                  ~ "unmatched"),
+    country_differs_from_registry = !is.na(reg_country) & Country != reg_country
+  )
+
+# Check
+cat("Matched:", sum(!is.na(crashes_country$Country)), "of", nrow(crashes_country), "\n\n")
+crashes_country %>% count(country_source, sort = TRUE) %>% print()
+
+# Anything still unmatched...
+crashes_country %>% filter(is.na(Country)) %>% count(operator, registration, sort = TRUE) %>% print()
+
+# Edge Case
 crashes_country %>%
-  filter(is.na(Country)) %>%
-  count(operator, sort = TRUE) %>%
-  head(30)          
+  filter(country_differs_from_registry) %>%
+  select(operator, registration, Country, reg_country, country_source) %>%
+  print(n = Inf)
 
-#Crashes by country
+# ---------- Crashes by country chart ----------
 country_counts <- crashes_country %>%
   filter(!is.na(Country)) %>%
   count(Country, sort = TRUE)
@@ -217,9 +333,10 @@ country_counts %>%
   geom_col(fill = "darkslateblue") +
   coord_flip() +
   labs(title = "Top 15 Countries by Accident Count",
-       subtitle = "Commercial Passenger Fixed-Wing Aircraft (2002–2024)",
+       subtitle = "Commercial Passenger Fixed-Wing Aircraft (2002–2023)",
        x = "Country", y = "Number of Accidents") +
   theme_minimal()
+```
 ```
 
 ```{r}

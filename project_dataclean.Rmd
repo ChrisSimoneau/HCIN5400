@@ -6,25 +6,23 @@ output: html_document
 ---
 
 
-
 ```{r}
-
 library(tidyverse)
 library(lubridate)
 
-# ---- Load dataset... kagle does not have a url option
+#Load dataset
 input_file <- "C:/Users/cpeng/Downloads/archive/accident_details_compiled.csv"
 raw_data <- read_csv(input_file, show_col_types = FALSE)
 
-# Standardise column names 
+# Standardise column names (raw file has "Flight #", "AC Type", "cn / ln", etc.)
 names(raw_data) <- c("source", "date", "time", "location", "operator", "flight_no",
                      "route", "ac_type", "registration", "cn_ln", "aboard",
                      "fatalities", "ground", "summary")
 
-#Keyword patterns 
+# case stuff
 rx <- function(x) regex(paste(x, collapse = "|"), ignore_case = TRUE)
 
-## filter out military
+## Military filtering
 military_op <- rx(c("^\\s*mil+i?tary", "/\\s*military", "air ?force", "\\barmy\\b",
                     "\\bnavy\\b", "naval", "marine corps", "\\bUSAF\\b", "\\bRAF\\b",
                     "\\bIAF\\b", "national guard", "luftwaffe", "luftstreitkr",
@@ -32,8 +30,8 @@ military_op <- rx(c("^\\s*mil+i?tary", "/\\s*military", "air ?force", "\\barmy\\
                     "armada", "aeronautica militare?", "\\bforce\\b", "soviet air"))
 military_sum <- rx(c("military (flight|aircraft|transport|plane)",
                      "air force (plane|aircraft|transport)"))
+military_ac  <- rx(c("\\bKC-?\\d", "hercules"))
 
-## get (OUt) the chopptas
 helicopter_ac <- rx(c("helicopter", "rotor", "rotocraft", "copter", "ecureuil",
                       "\\bMi-?\\d", "\\bMil\\b", "sikors", "\\bAS[- ]?3\\d\\d",
                       "\\bSA ?3\\d\\d", "\\bBell\\b", "robinson", "agusta",
@@ -41,37 +39,40 @@ helicopter_ac <- rx(c("helicopter", "rotor", "rotocraft", "copter", "ecureuil",
                       "puma", "chinook", "vertol", "alouette", "frelon",
                       "\\bUH-?\\d", "\\bCH-?\\d", "\\bAW ?\\d{3}", "hughes", "\\bMD ?500"))
 
-## for the 2 that still exist
+## Banning the 2 remaining zepplins
 non_airplane_ac <- rx(c("balloon", "blimp", "airship", "glider", "zeppelin"))
 
-## im sorry wilson
+
+## Sorry Wilson
 cargo_op  <- rx(c("cargo", "freight", "parcel", "courier", "\\bmail\\b", "\\bFedEx\\b",
                   "\\bUPS\\b", "\\bDHL\\b", "aeropostale", "air ?lift"))
 cargo_sum <- rx(c("cargo (plane|flight|aircraft)", "freighter", "all[- ]cargo",
                   "carrying cargo", "mail (plane|flight)"))
 
-## UN Edge case urthg
+## UN Edge case was fun...
 govt_op <- rx(c("government", "presidential", "police", "united nations", "\\bUN\\b",
                 "red cross", "border (guard|patrol)", "customs", "emergency (ministry|situations)",
                 "emercom", "\\bFAA\\b", "\\bNASA\\b", "forest service", "state aviation",
                 "royal flight"))
 
-## drones maybe
 surveillance_kw <- rx(c("surveillance (flight|mission|aircraft|plane)", "reconnaissance",
                         "aerial survey", "survey flight", "aerial photograph", "\\bspy\\b",
                         "intelligence", "news (helicopter|plane|aircraft)"))
 
+## More edge cases
 private_op <- rx(c("(^|-\\s*)private", "charter", "taxi", "air ambulance",
                    "flying (club|service)", "illegal flight"))
+## Rip Sky King
 illegal_sum <- rx(c("illegal", "unauthori[sz]ed", "unlicensed", "unregistered", "smuggl",
                     "drug (smuggl|traffick|flight|run)", "narcotic", "contraband",
-                    "clandestine", "stolen|steal")) ## rip skyking
+                    "clandestine", "stolen|steal"))
 
+## Other edge cases that  can technically be tied to an airliner if it was a training flight or inaugural 
 non_revenue_kw <- rx(c("test flight", "training flight", "ferry flight", "positioning flight",
                        "delivery flight", "demonstration flight", "air show", "flight test",
                        "maintenance flight", "demonstration", "\\btest\\b"))
 
-# Parse passengers > 0
+# FILTER
 flagged <- raw_data %>%
   mutate(
     across(c(operator, route, ac_type, summary), ~ replace_na(as.character(.x), "")),
@@ -81,14 +82,17 @@ flagged <- raw_data %>%
     date_parsed  = mdy(date),
     year         = year(date_parsed)
   ) %>%
-  #Restrict to 2002-01-01 through 2023-12-31
+  # 2002-2023
   filter(!is.na(date_parsed),
          date_parsed >= as.Date("2002-01-01"),
          date_parsed <= as.Date("2023-12-31")) %>%
-  # First matching rule wins
+  # Duplicate removal because there was a goose (plane, not the animal or Goose from top gun(RIP GOOSE))
+  distinct(date, operator, registration, location, ac_type, aboard, .keep_all = TRUE) %>%
+  # Matching and filtering
   mutate(excluded_because = case_when(
     str_detect(operator, military_op) | str_detect(summary, military_sum) ~ "Military aviation",
     str_detect(ac_type, helicopter_ac) | str_detect(summary, regex("helicopter", ignore_case = TRUE)) ~ "Helicopter",
+    str_detect(ac_type, military_ac)                                       ~ "Military aviation",
     str_detect(ac_type, non_airplane_ac)                                   ~ "Balloon / airship / glider",
     str_detect(operator, cargo_op) | str_detect(summary, cargo_sum)        ~ "Cargo flight",
     passengers == 0 |
@@ -101,23 +105,41 @@ flagged <- raw_data %>%
     TRUE ~ NA_character_
   ))
 
-#table
+# TABLES
 commercial_pax <- flagged %>% filter(is.na(excluded_because)) %>% select(-excluded_because)
 all_excluded   <- flagged %>% filter(!is.na(excluded_because))
 
-# Summary
-cat("Rows in raw file:                      ", nrow(raw_data), "\n")
-cat("Rows in date range (before exclusions):", nrow(flagged), "\n")
-cat("Rows after exclusions:                 ", nrow(commercial_pax), "\n\n")
+# Later chunks use curated_data, so keep it as an alias (already duplicate-free)
+curated_data <- commercial_pax
+
+# SUMMARY
+cat("Rows in raw file:                         ", nrow(raw_data), "\n")
+cat("Rows in date range (after de-duplication):", nrow(flagged), "\n")
+cat("Rows after exclusions:                    ", nrow(commercial_pax), "\n\n")
 all_excluded %>% count(excluded_because, sort = TRUE) %>% print()
 
+# ---- Check: no duplicates remain ----
+dups <- commercial_pax %>%
+  count(date, operator, registration, location, ac_type, aboard) %>%
+  filter(n > 1)
+stopifnot(nrow(dups) == 0)
+cat("\nDuplicate check passed: no duplicate rows in commercial_pax\n\n")
 
+# Tally
+aircraft_tally <- commercial_pax %>%
+  mutate(ac_type = str_squish(ac_type),
+         ac_type = if_else(is.na(ac_type) | ac_type == "", "(blank)", ac_type)) %>%
+  count(ac_type, sort = TRUE, name = "n_accidents")
 
-# sum
-curated_data <- commercial_pax %>%
-  distinct(date, operator, registration, location, .keep_all = TRUE)
+print(aircraft_tally, n = Inf)
 
-cat("Rows in curated_data:", nrow(curated_data), "\n")
+# Check: tally should add up to the rows after exclusions
+cat("Sum of tally:         ", sum(aircraft_tally$n_accidents), "\n")
+cat("Rows after exclusions:", nrow(commercial_pax), "\n")
+
+# Spot-check:
+# View(all_excluded %>% select(date, operator, ac_type, aboard, excluded_because))
+# View(commercial_pax %>% select(date, operator, ac_type, aboard, route))
 ```
 
 

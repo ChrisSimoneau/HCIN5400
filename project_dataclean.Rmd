@@ -222,7 +222,7 @@ pick_country <- function(candidates, reg_c) {
   })
 }
 
-# ---------- 2. ICAO nationality marks ----------
+# ---------- 2. ICAO nationality marks: Retrieved from https://www.icao.int/sites/default/files/airnavigation/NationalityMarks/Nationality_Marks_en.pdf----------
 reg_prefix_country <- c(
   "N"="United States","AA"="United States","K"="United States","W"="United States",
   "A2"="Botswana","A3"="Tonga","A40"="Oman","A5"="Bhutan","A6"="United Arab Emirates","A7"="Qatar","A9C"="Bahrain","AP"="Pakistan",
@@ -405,14 +405,40 @@ vuong(zip_model, standard_poisson)
 airline_year_panel <- airline_year_panel %>%
   mutate(predicted_accidents = predict(zip_model, type = "response"))
 
-ggplot(airline_year_panel, aes(x = year, y = n_accidents)) +
-  geom_jitter(alpha = 0.3, width = 0.2, height = 0.1, color = "darkslateblue") +
-  stat_summary(fun = mean, geom = "line", color = "firebrick", linewidth = 1) +
+ggplot(airline_year_panel, aes(x = year)) +
+  geom_jitter(
+    aes(y = n_accidents),
+    alpha = 0.25,
+    width = 0.2,
+    height = 0.08,
+    color = "darkslateblue"
+  ) +
+  stat_summary(
+    aes(y = n_accidents, color = "Observed Mean"),
+    fun = mean,
+    geom = "line",
+    linewidth = 1
+  ) +
+  stat_summary(
+    aes(y = predicted_accidents, color = "ZIP Predicted"),
+    fun = mean,
+    geom = "line",
+    linewidth = 1,
+    linetype = "dashed"
+  ) +
+  scale_color_manual(
+    name = "Trend",
+    values = c(
+      "Observed Mean" = "firebrick",
+      "ZIP Predicted" = "darkorange"
+    )
+  ) +
   labs(
     title = "Observed vs. Model-Predicted Accident Trends (2002–2023)",
     subtitle = "Zero-Inflated Poisson Regression Fit",
     x = "Year",
     y = "Number of Accidents per Airline"
   ) +
-  theme_minimal()
+  theme_minimal() +
+  theme(legend.position = "right")
 ```

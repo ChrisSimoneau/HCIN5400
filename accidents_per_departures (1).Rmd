@@ -1,0 +1,260 @@
+---
+title: "Accidents per Million Departures, 2002–2023"
+subtitle: "Combining the cleaned crash list with registered-carrier departures"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.width = 9, fig.height = 5)
+options(scipen = 999)
+fmt <- function(x, d = 0) formatC(x, format = "f", digits = d, big.mark = ",")
+# Base R only: no add-on packages needed.
+```
+
+# Purpose
+
+This file builds the outcome variable for the study, **accidents per million departures**, by combining:
+
+1. the cleaned departures panel (`departures_clean_long_2002_2023.csv`, from `departures_cleaning_and_descriptives.Rmd`), and
+2. the cleaned crash list with a country for each crash (`crashes_with_country_2002_2023.csv`, from the crash-cleaning R Markdown).
+
+The result is handed on for the GDP analysis.
+
+# Inputs
+
+Put both CSV files in the same folder as this file, or change the paths below.
+
+The crash file needs one row per crash with at least a `year` column and a `Country` column. In the crash-cleaning R Markdown, add this line at the end of the country-matching chunk to create it:
+
+`write_csv(crashes_country, "crashes_with_country_2002_2023.csv")`
+
+```{r inputs}
+departures_file <- "departures_clean_long_2002_2023.csv"
+crashes_file    <- "crashes_with_country_2002_2023.csv"
+out_dir         <- "output"
+dir.create(out_dir, showWarnings = FALSE)
+
+dep <- read.csv(departures_file, check.names = FALSE, stringsAsFactors = FALSE)
+crashes <- read.csv(crashes_file, check.names = FALSE, stringsAsFactors = FALSE,
+                    fileEncoding = "UTF-8")
+
+stopifnot(all(c("Country Name", "Country Code", "Year", "Departures") %in% names(dep)),
+          all(c("year", "Country") %in% names(crashes)))
+
+c(departure_rows = nrow(dep), crashes = nrow(crashes))
+table(crashes$year, useNA = "ifany")
+```
+
+# Step 1: Give every crash a World Bank country code
+
+The crash file uses ISO-style country names (for example "Iran, Islamic Republic Of"). The departures file uses World Bank names ("Iran, Islamic Rep."). Names are first matched exactly, ignoring case, accents and punctuation. The names that differ between the two lists are matched through the crosswalk below.
+
+```{r crosswalk}
+norm <- function(x) {
+  # Remove accents the same way on Windows, Mac and Linux (iconv differs between them)
+  x <- tolower(enc2utf8(as.character(x)))
+  x <- chartr("áàâäãåéèêëíìîïóòôöõúùûüçñý",
+              "aaaaaaeeeeiiiiooooouuuucny", x)
+  x <- gsub("&", " and ", x)
+  x <- gsub("[^a-z0-9 ]", " ", x)
+  gsub("\\s+", " ", trimws(x))
+}
+
+# Names in the crash file that differ from World Bank names -> World Bank code.
+# Add a line here for any name reported as unmatched below.
+crosswalk <- c(
+  "congo the democratic republic of the"     = "COD",
+  "democratic republic of the congo"         = "COD",
+  "congo"                                    = "COG",
+  "iran islamic republic of"                 = "IRN",
+  "iran"                                     = "IRN",
+  "venezuela"                                = "VEN",
+  "venezuela bolivarian republic of"         = "VEN",
+  "turkiye"                                  = "TUR",
+  "turkey"                                   = "TUR",
+  "hong kong"                                = "HKG",
+  "macao"                                    = "MAC",
+  "macau"                                    = "MAC",
+  "korea republic of"                        = "KOR",
+  "south korea"                              = "KOR",
+  "korea democratic people s republic of"    = "PRK",
+  "north korea"                              = "PRK",
+  "russia"                                   = "RUS",
+  "tanzania united republic of"              = "TZA",
+  "tanzania"                                 = "TZA",
+  "moldova republic of"                      = "MDA",
+  "lao people s democratic republic"         = "LAO",
+  "laos"                                     = "LAO",
+  "micronesia federated states of"           = "FSM",
+  "syria"                                    = "SYR",
+  "vietnam"                                  = "VNM",
+  "egypt"                                    = "EGY",
+  "yemen"                                    = "YEM",
+  "gambia"                                   = "GMB",
+  "bahamas"                                  = "BHS",
+  "kyrgyzstan"                               = "KGZ",
+  "slovakia"                                 = "SVK",
+  "czech republic"                           = "CZE",
+  "cape verde"                               = "CPV",
+  "saint lucia"                              = "LCA",
+  "saint kitts and nevis"                    = "KNA",
+  "saint vincent and the grenadines"         = "VCT",
+  "ivory coast"                              = "CIV",
+  "brunei"                                   = "BRN",
+  "somalia"                                  = "SOM",
+  "macedonia"                                = "MKD",
+  "swaziland"                                = "SWZ",
+  "burma"                                    = "MMR",
+  "east timor"                               = "TLS",
+  "united states of america"                 = "USA",
+  "usa"                                      = "USA",
+  "uk"                                       = "GBR",
+  "great britain"                            = "GBR",
+  "palestine"                                = "PSE",
+  "palestine state of"                       = "PSE",
+  "netherlands antilles"                     = "CUW"   # dissolved 2010; Curacao is its main successor
+)
+
+wb <- unique(dep[, c("Country Name", "Country Code")])
+wb_lookup <- setNames(wb$`Country Code`, norm(wb$`Country Name`))
+
+crash_key <- norm(crashes$Country)
+# Safety net for accented names, whatever the computer's text settings
+crash_key[grepl("rkiye$", crashes$Country, ignore.case = TRUE)]  <- "turkiye"
+crash_key[grepl("^C.te d", crashes$Country, ignore.case = TRUE)] <- "cote d ivoire"
+crash_key[grepl("^Cura.ao$", crashes$Country, ignore.case = TRUE)] <- "curacao"
+crash_key[grepl("^S.o Tom", crashes$Country, ignore.case = TRUE)] <- "sao tome and principe"
+crashes$`Country Code` <- unname(ifelse(crash_key %in% names(wb_lookup), wb_lookup[crash_key],
+                                 ifelse(crash_key %in% names(crosswalk), crosswalk[crash_key], NA)))
+crashes$match_method <- ifelse(crash_key %in% names(wb_lookup), "World Bank name",
+                         ifelse(crash_key %in% names(crosswalk), "crosswalk",
+                         ifelse(is.na(crashes$Country) | crashes$Country == "", "no country", "unmatched")))
+table(crashes$match_method)
+
+# Crashes that could not be given a World Bank code (e.g. Taiwan, which the World Bank does not list)
+unmatched <- crashes[is.na(crashes$`Country Code`), ]
+if (nrow(unmatched)) as.data.frame(table(Country = unmatched$Country), responseName = "Crashes") else "None"
+```
+
+`r sum(!is.na(crashes$"Country Code"))` of `r nrow(crashes)` crashes (`r round(mean(!is.na(crashes$"Country Code")) * 100, 1)`%) were given a World Bank code.
+
+# Step 2: Count crashes per country per year
+
+```{r counts}
+cm <- crashes[!is.na(crashes$`Country Code`) & crashes$year %in% 2002:2023, ]
+acc <- aggregate(list(Accidents = rep(1L, nrow(cm))),
+                 by = list(`Country Code` = cm$`Country Code`, Year = cm$year), FUN = sum)
+names(acc) <- c("Country Code", "Year", "Accidents")
+head(acc[order(-acc$Accidents), ], 10)
+```
+
+# Step 3: Join crashes onto the departures panel
+
+The join starts from **every** country-year in the departures file, so a country-year with flights and no crash gets **0**, not a blank.
+
+```{r merge}
+panel <- merge(dep, acc, by = c("Country Code", "Year"), all.x = TRUE)
+panel$Accidents[is.na(panel$Accidents)] <- 0L
+
+# Crashes that land in a country-year with no departure figure cannot be turned into a rate
+acc_check <- merge(acc, dep[, c("Country Code", "Year", "Departures")],
+                   by = c("Country Code", "Year"), all.x = TRUE)
+no_denominator <- acc_check[is.na(acc_check$Departures) | acc_check$Departures == 0, ]
+no_denominator <- merge(no_denominator, wb, by = "Country Code", all.x = TRUE)
+no_denominator[, c("Country Name", "Country Code", "Year", "Accidents", "Departures")]
+
+# Rate per country-year (missing where departures are missing or zero)
+panel$Has_departures <- !is.na(panel$Departures) & panel$Departures > 0
+panel$Accidents_per_million <- ifelse(panel$Has_departures,
+                                      panel$Accidents / panel$Departures * 1e6, NA)
+panel <- panel[order(panel$`Country Name`, panel$Year),
+               c("Country Name", "Country Code", "Year", "Departures", "Departures_millions",
+                 "Accidents", "Accidents_per_million", "Has_departures", "Years_reported_2002_2023")]
+```
+
+Accounting check: `r sum(acc$Accidents)` matched crashes in 2002–2023; `r sum(panel$Accidents[panel$Has_departures])` fall in a country-year with departures; `r sum(no_denominator$Accidents)` do not (listed above) and are left out of the rates.
+
+# Step 4: One rate per country for the whole period
+
+Crashes are rare, so a single year's rate is mostly 0 or very large. Each country's accidents and departures are therefore added up over 2002–2023 first, using only the years in which the country reported departures, and then divided.
+
+```{r country-rates}
+pp <- panel[panel$Has_departures, ]
+cty <- aggregate(cbind(Accidents, Departures) ~ `Country Code`, data = pp, FUN = sum)
+cty$Years_with_departures <- as.integer(table(pp$`Country Code`)[cty$`Country Code`])
+cty <- merge(wb, cty, by = "Country Code")
+cty$Mean_annual_departures <- cty$Departures / cty$Years_with_departures
+cty$Accidents_per_million  <- cty$Accidents / cty$Departures * 1e6
+# Flag (do not drop) countries with too few flights for a stable rate
+cty$Low_exposure_under_10k <- cty$Mean_annual_departures < 10000
+cty <- cty[order(-cty$Accidents_per_million, -cty$Accidents),
+           c("Country Name", "Country Code", "Years_with_departures", "Departures",
+             "Mean_annual_departures", "Accidents", "Accidents_per_million", "Low_exposure_under_10k")]
+rownames(cty) <- NULL
+
+world_rate <- sum(cty$Accidents) / sum(cty$Departures) * 1e6
+c(countries = nrow(cty), with_any_accident = sum(cty$Accidents > 0),
+  low_exposure = sum(cty$Low_exposure_under_10k),
+  overall_rate_per_million = round(world_rate, 3))
+```
+
+# Descriptive statistics of the rate
+
+```{r describe}
+ok <- cty[!cty$Low_exposure_under_10k, ]
+q <- function(x) round(c(N = length(x), Mean = mean(x), Median = median(x), SD = sd(x),
+                         Min = min(x), Q1 = unname(quantile(x, .25)),
+                         Q3 = unname(quantile(x, .75)), Max = max(x)), 3)
+rbind(`All countries` = q(cty$Accidents_per_million),
+      `10,000+ departures a year` = q(ok$Accidents_per_million))
+
+# Highest rates among countries with at least 10,000 departures a year
+head(ok[, c("Country Name", "Accidents", "Departures", "Accidents_per_million")], 15)
+```
+
+```{r plot, fig.height=6}
+top <- head(ok[ok$Accidents > 0, ], 20)
+par(mar = c(4.5, 11, 3, 1))
+barplot(rev(top$Accidents_per_million), names.arg = rev(top$`Country Name`), horiz = TRUE,
+        las = 1, col = "steelblue", border = NA,
+        xlab = "Accidents per million departures, 2002–2023",
+        main = "Highest accident rates (countries with 10,000+ departures a year)")
+abline(v = world_rate, lty = 2, col = "grey40")
+mtext(sprintf("dashed line = all countries combined (%.2f)", world_rate), side = 3, line = 0.2, cex = 0.8)
+```
+
+# Files for the GDP analysis
+
+```{r export}
+write.csv(panel, file.path(out_dir, "accidents_departures_country_year_2002_2023.csv"),
+          row.names = FALSE, na = "")
+write.csv(cty, file.path(out_dir, "accident_rate_by_country_2002_2023.csv"), row.names = FALSE)
+write.csv(rbind(
+  data.frame(Reason = "No World Bank country code", unmatched[, c("Country", "year")]),
+  if (nrow(no_denominator)) data.frame(Reason = "No departures for that country-year",
+    Country = no_denominator$`Country Name`, year = no_denominator$Year)),
+  file.path(out_dir, "crashes_not_in_rates.csv"), row.names = FALSE)
+list.files(out_dir)
+```
+
+| File | One row per | Use it for |
+| --- | --- | --- |
+| `accidents_departures_country_year_2002_2023.csv` | country-year | Year-by-year model (merge yearly GDP on `Country Code` + `Year`) |
+| `accident_rate_by_country_2002_2023.csv` | country | Higher- vs lower-GDP comparison (merge average GDP on `Country Code`) |
+| `crashes_not_in_rates.csv` | crash left out | Reporting what was excluded and why |
+
+**Notes for the GDP step**
+
+* Merge on `Country Code` (World Bank three-letter code), never on country names.
+* Use `Accidents_per_million` as the outcome. For a regression, model `Accidents` with `offset(log(Departures))`.
+* `Low_exposure_under_10k` flags countries averaging fewer than 10,000 departures a year. Run the analysis with and without them.
+* Country-years with `Has_departures = FALSE` have no rate and should be left out.
+
+```{r session}
+sessionInfo()
+```

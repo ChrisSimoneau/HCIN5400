@@ -1,0 +1,105 @@
+---
+title: "GDP and Aviation Accident Rates"
+author: "Dongqi Mo"
+date: "2026-11-25"
+output: html_document
+---
+```{r load-data}
+gdp <- read.csv("output/gdp_statistics_by_country.csv")
+accidents <- read.csv("accident_rate_by_country_2002_2023.csv",
+                      check.names = FALSE)
+
+head(gdp[c("country_code", "mean_usd")])
+head(accidents[c("Country Code", "Accidents_per_million")])
+```
+
+```{r merge-data}
+# Join by country code and keep all economies in the accident data.
+combined <- merge(
+  accidents,
+  gdp[c("country_code", "mean_usd")],
+  by.x = "Country Code",
+  by.y = "country_code",
+  all.x = TRUE
+)
+
+# Check the first six rows of the merged data.
+head(combined[c("Country Code", "mean_usd", "Accidents_per_million")])
+
+# List economies without a usable GDP value.
+missing_gdp <- combined[
+  is.na(combined$mean_usd),
+  c("Country Code", "Country Name")
+]
+missing_gdp
+```
+
+```{r plot-gdp-accident-rate}
+# Keep rows with a positive GDP and an available accident rate.
+plot_data <- subset(
+  combined,
+  is.finite(mean_usd) & mean_usd > 0 & is.finite(Accidents_per_million)
+)
+
+# Plot one point per economy.
+plot(
+  plot_data$mean_usd / 1e9,
+  plot_data$Accidents_per_million,
+  log = "x",
+  pch = 19,
+  col = "steelblue",
+  xlab = "Average GDP (current US$ billions, log scale)",
+  ylab = "Accidents per million departures"
+)
+```
+
+```{r gdp-accident-correlation}
+# Measure the rank correlation between GDP and the accident rate.
+rho <- cor(
+  plot_data$mean_usd,
+  plot_data$Accidents_per_million,
+  method = "spearman"
+)
+
+nrow(plot_data)
+round(rho, 3)
+```
+
+## Results
+
+Across the 174 economies with usable data, average GDP and recorded
+aviation accidents per million departures had a weak positive rank
+correlation (Spearman's rho = 0.231). This describes an association
+across economies and does not establish a causal effect of GDP.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

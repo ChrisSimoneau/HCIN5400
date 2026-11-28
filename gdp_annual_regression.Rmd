@@ -1,0 +1,128 @@
+---
+title: "GDP and Aviation Accident Rates by Year, 2002–2023"
+author: "Dongqi Mo"
+date: "2026-11-25"
+output: html_document
+---
+
+## Introduction
+
+I wanted to see whether economies with higher GDP tend to have higher or lower aviation accident rates. For this analysis, I used annual data from 2002 to 2023.
+
+## Data and methods
+
+I used the GDP and aviation CSVs already in our GitHub repository. I converted the GDP year columns into rows and matched the two tables by country code and year. Each matched row has one economy's GDP, accident count, and departures for one year. I kept years with zero accidents if they had GDP and departure data.
+
+```{r read-data}
+repo <- "https://raw.githubusercontent.com/ChrisSimoneau/HCIN5400/"
+gdp_wide <- read.csv(
+  paste0(repo, "de40a22a8386e69549ad1f7a46ae0a8a65c7da1c/",
+         "gdp_annual_and_statistics_by_country.csv"),
+  check.names = FALSE
+)
+flights <- read.csv(
+  paste0(repo, "c1dc63208652d0264e16dddd2d9525d455a9dd08/",
+         "accidents_departures_country_year_2002_2023.csv")
+)
+```
+
+```{r reshape-gdp}
+gdp <- data.frame()
+for (year in 2002:2023) {
+  one_year <- data.frame(
+    country_code = gdp_wide$Code,
+    year = year,
+    gdp_current_usd = gdp_wide[[as.character(year)]]
+  )
+  gdp <- rbind(gdp, one_year)
+}
+```
+
+```{r check-keys}
+stopifnot(!anyDuplicated(flights[c("Country.Code", "Year")]),
+          !anyDuplicated(gdp[c("country_code", "year")]))
+```
+
+```{r merge-data}
+annual <- merge(flights, gdp,
+                by.x = c("Country.Code", "Year"),
+                by.y = c("country_code", "year"),
+                all.x = TRUE)
+
+model_data <- subset(annual, Departures > 0 & gdp_current_usd > 0 &
+                       is.finite(Accidents) & Accidents >= 0)
+model_data$log2_gdp <- log2(model_data$gdp_current_usd)
+```
+
+The CSV below contains the same rows used in the regression. The accident rate column is included for reference.
+
+```{r export-regression-data}
+regression_data <- model_data[c("Country.Name", "Country.Code", "Year",
+                                "gdp_current_usd", "Accidents", "Departures")]
+regression_data$Accidents_per_million <- model_data$Accidents_per_million
+write.csv(regression_data, "gdp_annual_regression_data_with_rates.csv",
+          row.names = FALSE)
+```
+
+```{r regression}
+fit <- glm(
+  Accidents ~ log2_gdp + factor(Year),
+  offset = log(Departures),
+  family = poisson(),
+  data = model_data,
+  na.action = na.fail
+)
+round(exp(coef(fit)[["log2_gdp"]]), 3)
+```
+
+```{r clustered-interval}
+n <- nobs(fit)
+scores <- model.matrix(fit) * (model_data$Accidents - fitted(fit))
+country_scores <- rowsum(scores, model_data$Country.Code)
+economies <- nrow(country_scores)
+
+# Calculate the clustered standard error for the GDP coefficient.
+gdp_weights <- vcov(fit)[, "log2_gdp"]
+adjustment <- economies / (economies - 1) * (n - 1) / (n - fit$rank)
+se <- sqrt(adjustment * sum((country_scores %*% gdp_weights)^2))
+estimate <- coef(fit)[["log2_gdp"]]
+rate_ratio <- exp(estimate)
+percent_lower <- 100 * (1 - rate_ratio)
+ci <- exp(estimate + c(-1, 1) * qt(.975, economies - 1) * se)
+
+data.frame(
+  Annual_records = n,
+  Economies = economies,
+  Rate_ratio = round(rate_ratio, 3),
+  Percent_lower = round(percent_lower, 1),
+  CI_lower = round(ci[1], 3),
+  CI_upper = round(ci[2], 3)
+)
+```
+
+## Figure 1. Estimated accident rate ratio
+
+```{r regression-figure, fig.width=6, fig.height=2.6}
+library(ggplot2)
+
+plot_data <- data.frame(
+  estimate = rate_ratio, lower = ci[1], upper = ci[2],
+  comparison = "Twice the GDP"
+)
+
+ggplot(plot_data, aes(x = estimate, y = comparison)) +
+  geom_vline(xintercept = 1, linetype = "dashed") +
+  geom_errorbar(aes(xmin = lower, xmax = upper), orientation = "y", width = 0.12) +
+  geom_point(size = 3) +
+  labs(x = "Accident rate ratio (95% CI)", y = NULL) +
+  theme_minimal()
+```
+
+## Results
+
+The regression included 3,277 annual records from 173 economies. In the same year, economies with twice the GDP had an estimated accident rate per departure about 22% lower. The estimated rate ratio was 0.777, with a 95% confidence interval of 0.737 to 0.820.
+
+
+
+
+

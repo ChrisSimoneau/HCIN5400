@@ -5,9 +5,17 @@ date: "2026-11-25"
 output: html_document
 ---
 ```{r load-data}
-gdp <- read.csv("output/gdp_statistics_by_country.csv")
-accidents <- read.csv("accident_rate_by_country_2002_2023.csv",
-                      check.names = FALSE)
+repo <- "https://raw.githubusercontent.com/ChrisSimoneau/HCIN5400/"
+gdp_table <- read.csv(paste0(
+  repo, "de40a22a8386e69549ad1f7a46ae0a8a65c7da1c/",
+  "gdp_annual_and_statistics_by_country.csv"
+))
+gdp <- data.frame(country_code = gdp_table$Code, mean_usd = gdp_table$Mean)
+
+accidents <- read.csv(paste0(
+  repo, "c1dc63208652d0264e16dddd2d9525d455a9dd08/",
+  "accident_rate_by_country_2002_2023.csv"
+), check.names = FALSE)
 
 head(gdp[c("country_code", "mean_usd")])
 head(accidents[c("Country Code", "Accidents_per_million")])
@@ -72,34 +80,20 @@ aviation accidents per million departures had a weak positive rank
 correlation (Spearman's rho = 0.231). This describes an association
 across economies and does not establish a causal effect of GDP.
 
+## Higher vs. lower GDP comparison
 
+I split the matched economies at the median of their 2002–2023 average GDP. Economies at or above the median are in the higher GDP group. For each group, I divided total accidents by total departures and multiplied by one million.
 
+```{r compare-gdp-groups}
+cutoff <- median(plot_data$mean_usd)
+plot_data$GDP_group <- ifelse(plot_data$mean_usd < cutoff,
+                             "Lower GDP", "Higher GDP")
 
+totals <- aggregate(cbind(Accidents, Departures) ~ GDP_group,
+                    data = plot_data, FUN = sum)
+totals$Economies <- as.integer(table(plot_data$GDP_group)[totals$GDP_group])
+totals$Accidents_per_million <- round(totals$Accidents / totals$Departures * 1e6, 3)
+knitr::kable(totals)
+```
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+The median average GDP was about US$41.9 billion. Each group had 87 economies. The lower GDP group had 2.528 recorded accidents per million departures and the higher GDP group had 0.347, a difference of 2.181 per million departures.

@@ -97,3 +97,22 @@ knitr::kable(totals)
 ```
 
 The median average GDP was about US$41.9 billion. Each group had 87 economies. The lower GDP group had 2.528 recorded accidents per million departures and the higher GDP group had 0.347, a difference of 2.181 per million departures.
+
+### Average GDP and aviation accidents for five countries
+
+Each row shows one country's average annual GDP, total recorded aviation accidents, and accident rate for 2002–2023.
+
+```{r five-country-gdp}
+codes <- c("USA", "RUS", "IDN", "NPL", "CAN")
+five <- combined[match(codes, combined[["Country Code"]]), ]
+knitr::kable(
+  data.frame(Country = five[["Country Name"]],
+             Average_GDP = five$mean_usd / 1e9,
+             Recorded_Accidents = five$Accidents,
+             Accident_Rate = five$Accidents_per_million),
+  digits = c(0, 1, 0, 3), format.args = list(big.mark = ","),
+  col.names = c("Country", "Average annual GDP, 2002–2023 (current US$ billions)",
+                "Recorded accidents, 2002–2023",
+                "Accidents per million departures, 2002–2023")
+)
+```

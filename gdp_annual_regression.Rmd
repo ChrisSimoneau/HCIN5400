@@ -107,7 +107,7 @@ library(ggplot2)
 
 plot_data <- data.frame(
   estimate = rate_ratio, lower = ci[1], upper = ci[2],
-  comparison = "Twice the GDP"
+  comparison = "GDP twice as high"
 )
 
 ggplot(plot_data, aes(x = estimate, y = comparison)) +
@@ -120,7 +120,7 @@ ggplot(plot_data, aes(x = estimate, y = comparison)) +
 
 ## Results
 
-The regression included 3,277 annual records from 173 economies. In the same year, economies with twice the GDP had an estimated accident rate per departure about 22% lower. The estimated rate ratio was 0.777, with a 95% confidence interval of 0.737 to 0.820.
+The regression included 3,277 annual records from 173 economies. When comparing two economies in the same year, the model estimated that an economy with twice the GDP of the other had a 22% lower recorded accident rate per departure. The estimated rate ratio was 0.777 (95% confidence interval: 0.737 to 0.820).
 
 
 
